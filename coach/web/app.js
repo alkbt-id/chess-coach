@@ -1384,7 +1384,7 @@ function seqHtml(first, cur, rest = false, lead = false) {
     row.move(main, force);
     force = false;
     if (main.comment) { row.add(commentHtml(main, cur)); force = true; }
-    if (alts.length) { row.add(`<span class="paren">(${seqHtml(alts[0], cur)})</span>`, true); force = true; }
+    if (alts.length) { row.add(`<span class="paren">(${seqHtml(alts[0], cur).trimEnd()})</span>`, true); force = true; }
     n = main;
   }
   return row.end();
