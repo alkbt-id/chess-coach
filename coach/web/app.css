@@ -60,7 +60,8 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .app { height: 100vh; display: grid; grid-template-rows: auto 1fr; }
 
 /* ---------- header ---------- */
-.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+/* env(safe-area-*) is 0 on the Mac; on the iPad web app the page runs under the status bar (index.html) */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .modes { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; }
 .mode { border: 0; background: none; padding: 5px 14px; border-radius: 7px; font-weight: 600; cursor: pointer; color: var(--muted); }
 .mode small { font: 500 11px var(--font-mono); opacity: .8; margin-left: 2px; }
@@ -73,7 +74,7 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .job-chip.failed { color: var(--bad); }
 
 /* ---------- layout ---------- */
-.layout { min-height: 0; display: grid; grid-template-columns: 430px 10px auto 10px 360px; padding: 12px 12px 12px 14px; overflow: hidden; }
+.layout { min-height: 0; display: grid; grid-template-columns: 430px 10px auto 10px 360px; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)) 14px; overflow: hidden; }
 .layout.no-chat .chat, .layout.no-chat #g2 { display: none; }
 .gutter { cursor: col-resize; position: relative; touch-action: none; }
 .gutter::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 4px; width: 2px; border-radius: 2px; background: transparent; transition: background .15s; }

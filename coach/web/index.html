@@ -2,9 +2,13 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- iPad (coach/lan.py): opened from the Home Screen as an app, without Safari's bar; the status bar takes the header's color -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- iPad (coach/lan.py): opened from the Home Screen as an app, without Safari's bar. The page runs under the
+     status bar (black-translucent + viewport-fit=cover) and pads its header by env(safe-area-inset-top):
+     otherwise iPadOS 26+ lays a frosted band over the top of the app and the header under it looks blurred.
+     iOS reads the status-bar style when the icon is added: after changing it, re-add the icon. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1f1f1f" media="(prefers-color-scheme: dark)">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
