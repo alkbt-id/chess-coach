@@ -28,7 +28,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    /* VS Code "Dark Modern": neutral greys, blue accent. */
+    /* VS Code "Dark Modern": neutral greys; the blue accent toned down from VS Code's #4daafc / #0078d4, which glared. */
     --bg: #181818;
     --surface: #1f1f1f;
     --surface-2: #262626;
@@ -36,8 +36,8 @@
     --ink: #cccccc;
     --muted: #9d9d9d;
     --line: #333333;
-    --accent: #4daafc;
-    --accent-bg: #0078d4;
+    --accent: #7db3e3;
+    --accent-bg: #2c74af;
     --accent-ink: #ffffff;
     --accent-soft: #1c3a56;
     --good: #73c991;
