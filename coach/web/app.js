@@ -935,7 +935,8 @@ function showHover(t) {
   else if (r.line.threat && r.i === 0 && fenKey(r.line.base) === fenKey(shownFen)) tempArrow(ply.uci, "red");
   hov.cg.set({ fen: ply.fen, orientation: cg.state.orientation, lastMove: sq(ply.uci), check: new Chess(ply.fen).inCheck() ? turnOf(ply.fen) : false });
   const rect = t.getBoundingClientRect();
-  const W = 232;
+  const W = Math.min(320, innerWidth - 16, innerHeight - 16); // smaller on a narrow screen
+  hov.el.style.width = hov.el.style.height = `${W}px`;
   const x = Math.min(Math.max(8, rect.left - 20), innerWidth - W - 8);
   let y = rect.bottom + 8;
   if (y + W > innerHeight - 8) y = rect.top - W - 8;

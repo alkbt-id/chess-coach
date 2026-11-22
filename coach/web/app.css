@@ -331,7 +331,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .msg-tool .err-text { max-height: 3.2em; overflow: hidden; font-size: 11.5px; }
 
 /* hover over a move in text: a small board with the position after it (as on Lichess) */
-.hoverboard { position: fixed; z-index: 60; width: 232px; height: 232px; border-radius: 4px; overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.5); pointer-events: none; }
+.hoverboard { position: fixed; z-index: 60; width: 320px; height: 320px; border-radius: 4px; overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.5); pointer-events: none; }
 #hb { width: 100%; height: 100%; }
 .hov { cursor: help; border-bottom: 1px dotted currentColor; }
 .sqr { font-family: var(--font-mono); font-size: .95em; border-bottom: 1px dotted var(--muted); cursor: default; }
