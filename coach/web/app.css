@@ -544,3 +544,4 @@ a.btn { text-decoration: none; display: inline-block; }
 .rep-after.user { border-color: var(--bad); }
 .rep-after.opponent { border-color: var(--accent); }
 .rep-after.end, .rep-after.in { border-color: var(--good); }
+.rg-row.habit b, .rg-chk.habit { color: var(--muted); }

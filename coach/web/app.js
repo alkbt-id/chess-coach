@@ -3759,7 +3759,7 @@ function repLoadGames(sid) {
 }
 
 function rgCheckText(k) {
-  if (k.kind === "user") return `ты ушёл: ${k.num}${k.played}`;
+  if (k.kind === "user") return k.learned ? `ты ушёл: ${k.num}${k.played}` : `играл иначе, ещё до записи хода: ${k.num}${k.played}`;
   if (k.kind === "opponent") return `соперник ушёл: ${k.num}${k.played}`;
   return k.kind === "end" ? "по дереву до конца подготовки" : "вся партия по дереву";
 }
@@ -3773,7 +3773,7 @@ function repGamesHtml(s) {
   const row = (x, kind, i) => {
     const num = x.before && x.num.endsWith("…") ? "" : x.num; // a reply right after its move needs no number
     const move = kind === "end" ? `после ${esc(x.before)}` : `${x.before ? `${esc(x.before)} ` : ""}<b>${esc(num)}${esc(x.played)}</b>`;
-    const exp = kind === "user" && x.expected?.length ? ` <span class="rg-exp">вместо ${esc(x.expected[0])}</span>` : "";
+    const exp = (kind === "user" || kind === "habit") && x.expected?.length ? ` <span class="rg-exp">вместо ${esc(x.expected[0])}</span>` : "";
     return `<div class="rg-row ${kind}"><span class="rep-path">${move}${exp}</span><span class="rg-n">${rgGames(x.games)}</span>
       <span class="rg-act"><button type="button" class="link-btn" data-rg-goto="${esc(x.node)}">показать</button>${kind === "opponent"
         ? `<button type="button" class="link-btn" data-rg-add="${i}">добавить в дерево</button>` : ""}<button type="button" class="link-btn" data-rg-ask="${kind}" data-i="${i}">спросить Claude</button></span></div>`;
@@ -3781,10 +3781,10 @@ function repGamesHtml(s) {
   const group = (kind, title) => (d[kind]?.length ? `<h3>${title}</h3>${d[kind].map((x, i) => row(x, kind, i)).join("")}` : "");
   const recent = d.recent.map((g, i) => `<button type="button" class="rg-game" data-rg-game="${i}" title="Показать партию на доске">
       <span>${new Date(g.date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })} · ${esc(g.opp)}${g.oppRating ? ` (${g.oppRating})` : ""}</span>
-      <span class="res ${g.outcome}">${RG_RESULT[g.outcome] || ""}</span><span class="rg-chk ${g.check.kind}">${esc(rgCheckText(g.check))}</span></button>`).join("");
+      <span class="res ${g.outcome}">${RG_RESULT[g.outcome] || ""}</span><span class="rg-chk ${g.check.kind === "user" && !g.check.learned ? "habit" : g.check.kind}">${esc(rgCheckText(g.check))}</span></button>`).join("");
   return `<details class="rep-games"${rep.gamesOpen ? " open" : ""}><summary>Партии в этом дебюте: ${d.games} · ты уходил из дерева ${c.user || 0} · соперник ${c.opponent || 0}</summary>
-    <p class="hint">Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход — ошибка против репертуара; ход соперника — ответ, который стоит подготовить.</p>
-    ${group("user", "Где ты уходишь из дерева")}${group("opponent", "Ходы соперников, на которые в дереве нет ответа")}${group("end", "Где кончается подготовка")}
+    <p class="hint">Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход считается ошибкой, только если партия сыграна после того, как ход записан в дерево; более ранние партии — «раньше играл иначе». Ход соперника — ответ, который стоит подготовить.</p>
+    ${group("user", "Где ты уходишь из дерева")}${group("habit", "Раньше играл иначе — до того, как ход появился в дереве")}${group("opponent", "Ходы соперников, на которые в дереве нет ответа")}${group("end", "Где кончается подготовка")}
     <h3>Последние партии</h3><div class="rg-games">${recent}</div></details>`;
 }
 
@@ -3840,7 +3840,9 @@ async function repGamesClick(t) {
     const x = d[t.dataset.rgAsk][Number(t.dataset.i)];
     const where = x.before ? `после ${x.before}` : "в начальной позиции";
     const text = t.dataset.rgAsk === "user"
-      ? `В ${x.games} ${plural(x.games, "партии", "партиях", "партиях")} ${where} я играл ${x.num}${x.played}, а в моём репертуаре ${x.expected[0]}. Покажи, чем ${x.expected[0]} лучше и чем плох мой ход.`
+      ? `В ${x.games} ${plural(x.games, "партии", "партиях", "партиях")} ${where} я уже после записи хода в репертуар сыграл ${x.num}${x.played} вместо ${x.expected[0]}. Помоги запомнить: чем ${x.expected[0]} лучше и чем плох мой ход.`
+      : t.dataset.rgAsk === "habit"
+        ? `Раньше ${where} я играл ${x.num}${x.played} (${rgGames(x.games)}), а теперь в моём репертуаре ${x.expected[0]}. Чем ${x.expected[0]} лучше моей старой привычки?`
       : t.dataset.rgAsk === "opponent"
         ? `В моих партиях соперники ${where} играют ${x.num}${x.played} (${rgGames(x.games)}), а в репертуаре ответа на это нет. Что мне здесь играть?`
         : `Моя подготовка кончается ${where} (${rgGames(x.games)}). Как играть дальше в этой позиции?`;

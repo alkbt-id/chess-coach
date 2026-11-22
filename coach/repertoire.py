@@ -18,7 +18,10 @@
   like the puzzles: a right answer moves the card a step further (DRILL_STEPS), a wrong one brings it back soon.
 - The user's games against the trees: a game follows its tree move by move (another move order reaching a position
   of the tree counts too) until someone leaves it — the user (a mistake to look at), the opponent (a reply the
-  repertoire still lacks) — or the tree runs out (the end of the preparation). A section lists its games so, and
+  repertoire still lacks) — or the tree runs out (the end of the preparation). The user leaving it counts as a
+  mistake only when the move they skipped was written into the tree before the game (every node keeps "at", the
+  time it was written; 0 = before this was kept); earlier games, and moves the tree only took from the games, are
+  habits («раньше играл иначе»), shown apart. A section lists its games so, and
   a finished live game says it under the result (the window asks after the game, never during it).
 - While a live Lichess game is on (S.lock) the repertoire is closed: it is opening preparation.
 """
@@ -113,6 +116,9 @@ class Repertoire:
                 self.d["trees"][c] = sc
         for key, default in (("sections", []), ("notes", {}), ("lessons", {}), ("seq", 0), ("seeded", False), ("drill", {})):
             self.d.setdefault(key, default)
+        for tree in self.d["trees"].values():  # moves written before the time was kept: unknown, so never "already learned"
+            for n, _ in scenes.walk(tree["root"]):
+                n.setdefault("at", 0)
         self.task: asyncio.Task | None = None
 
     # ---- basics ----
@@ -121,6 +127,10 @@ class Repertoire:
         return self.d["trees"]
 
     def save(self, _sc: dict | None = None) -> None:
+        now = int(time.time() * 1000)
+        for tree in self.d["trees"].values():  # the moves written since the last save get their time
+            for n, _ in scenes.walk(tree["root"]):
+                n.setdefault("at", now)
         save_json(FILE, self.d)
 
     def tree_by_id(self, sid: str | None) -> dict | None:
@@ -262,7 +272,7 @@ class Repertoire:
         on = [s for s in self.d["sections"] if s["color"] == color and s["node"] in way]
         return max(on, key=lambda s: way[s["node"]], default=None)
 
-    def check_game(self, color: str, ucis: list[str], pos: dict | None = None) -> dict:
+    def check_game(self, color: str, ucis: list[str], pos: dict | None = None, date: int | None = None) -> dict:
         """How far a game from the initial position went along the tree of the user's colour: kind "user" / "opponent"
         (who left it, with the move played and the tree's moves there), "end" (the tree had no more moves), "in" (it
         never left). `node` is the last node of the tree the game reached."""
@@ -293,6 +303,9 @@ class Repertoire:
                     continue
                 out = {"kind": "end" if not node["children"] else "user" if mover == color else "opponent",
                        "ply": i + 1, "num": num, "played": san, "uci": u, "expected": [c["san"] for c in node["children"]]}
+                if out["kind"] == "user":  # a mistake only if the main move was written before the game (`date`, ms)
+                    main = node["children"][0]
+                    out["learned"] = bool(main.get("by") != "games" and main.get("at") and (date or 0) > main["at"])
                 break
             node = child
         sec = self.section_at(color, node["id"])
@@ -303,16 +316,17 @@ class Repertoire:
         """A section's games against its tree: where the user and the opponents left it, where the preparation ended."""
         color = sec["color"]
         pos = self.positions(color)
-        rows, groups = [], {"user": {}, "opponent": {}, "end": {}}
+        rows, groups = [], {"user": {}, "habit": {}, "opponent": {}, "end": {}}
         for g in self.section_games(sec):
-            chk = self.check_game(color, g["ucis"], pos)
+            chk = self.check_game(color, g["ucis"], pos, g["date"])
             rows.append({**{k: g[k] for k in ("id", "date", "outcome", "opp", "oppRating", "url")}, "ucis": g["ucis"], "check": chk})
-            if chk["kind"] in groups:
-                key = (chk["node"], "" if chk["kind"] == "end" else chk["uci"])
-                grp = groups[chk["kind"]].setdefault(key, {k: chk.get(k) for k in ("node", "before", "num", "played", "uci", "expected")} | {"games": 0})
+            kind = "habit" if chk["kind"] == "user" and not chk.get("learned") else chk["kind"]
+            if kind in groups:
+                key = (chk["node"], "" if kind == "end" else chk["uci"])
+                grp = groups[kind].setdefault(key, {k: chk.get(k) for k in ("node", "before", "num", "played", "uci", "expected")} | {"games": 0})
                 grp["games"] += 1
         top = {k: sorted(v.values(), key=lambda x: -x["games"])[:6] for k, v in groups.items()}
-        counts = Counter(r["check"]["kind"] for r in rows)
+        counts = Counter("habit" if r["check"]["kind"] == "user" and not r["check"].get("learned") else r["check"]["kind"] for r in rows)
         return {"section": sec["id"], "games": len(rows), "counts": dict(counts), **top, "recent": rows[:recent]}
 
     # ---- the drill ----
@@ -489,8 +503,9 @@ leading to a section may come from the user's games. Lessons are chats bound to 
   one move per position (a second one is an alternative); on the opponent's side add every reply worth preparing.
 - `repertoire_edit` (promote, delete, comment, goto), `repertoire_section` (create, rename, retire, restore): only
   when the user asks. A section the user stopped playing is retired, never deleted.
-- `repertoire_state` also compares the user's games with a section's tree: where the user left it (worth a lesson),
-  which opponent replies the tree lacks, where the preparation ends.
+- `repertoire_state` also compares the user's games with a section's tree: where the user left it after the move
+  was written into the tree (worth a lesson: they forgot it), where they played otherwise before it was written (an
+  old habit, not forgetting), which opponent replies the tree lacks, where the preparation ends.
 - The user drills the repertoire from memory in the app (the app plays the opponent's moves, the user their own);
   `repertoire_state` shows a section's drill results — positions they often miss are worth a lesson.
 - `repertoire_notes` is your memory between lessons (each chat is a separate session). The user does not see the
@@ -681,6 +696,7 @@ def _games_vs_tree(rep: dict) -> dict:
         return f"{where}: {x['num']}{x['played']}{exp} ({x['games']} games)"
     return {"games": rep["games"], "counts": rep["counts"],
             "user_left_the_tree": [line(x, "user") for x in rep["user"]],
+            "user_played_otherwise_before_the_move_was_in_the_tree": [line(x, "user") for x in rep["habit"]],
             "opponents_left_the_tree": [line(x, "opponent") for x in rep["opponent"]],
             "preparation_ended": [line(x, "end") for x in rep["end"]]}
 
@@ -785,7 +801,7 @@ async def http_check(b: dict):
     color = b.get("color")
     if color not in COLORS:
         raise SceneError("color must be white or black")
-    return REP.check_game(color, [str(u) for u in b.get("moves") or []])
+    return REP.check_game(color, [str(u) for u in b.get("moves") or []], date=int(time.time() * 1000))
 
 
 @route
