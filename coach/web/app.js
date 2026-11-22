@@ -964,10 +964,16 @@ function askAboutUserLine() {
   const mine = path.slice(k);
   const before = path.slice(0, k);
   const where = before.length ? `после ${moveText(before)}` : "из начальной позиции диаграммы";
+  // While Claude is busy the question waits; a further move on the same line replaces it (the server swaps a waiting
+  // message whose key is in `supersedes`), so a line played move by move gets one answer, not one per move.
+  const key = (n) => `ask:${sc.id}:${n.id}`;
   sendToChat(
     `Мой вариант: ${moveText(mine)} (${where}; доска «${sc.title}» ${sc.id}, узел ${node.id}).\n` +
     "Посчитай его движком и разбери: коротко в чате и на доске — комментарий и стрелки к моему ходу, " +
-    "лучший ответ соперника веткой из этого узла, и если мой ход хуже — какой был лучше.",
+    "лучший ответ соперника веткой из этого узла, и если мой ход хуже — какой был лучше. " +
+    "Ходы этого варианта, которые ты уже разобрал выше, не повторяй и их комментарии не переписывай — разбери только новые.",
+    sc,
+    { key: key(node), supersedes: path.map(key) },
   );
 }
 function waitScene(id) {
@@ -2288,10 +2294,20 @@ function renderChatLog() {
   const entries = ch.entries.get(c.id) || [];
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   log.innerHTML = entries.map(entryHtml).join("")
-    + (entries.length ? "" : `<div class="chat-empty">${quickHtml()}</div>`)
-    + (c.busy ? `<div class="thinking">Claude думает</div>` : "");
+    + (entries.length || c.queued?.length ? "" : `<div class="chat-empty">${quickHtml()}</div>`)
+    + chatTailHtml(c);
   if (atBottom || c.busy) log.scrollTop = log.scrollHeight;
   updateSendButton();
+}
+
+// below the log: «Claude думает» and the messages waiting for their turn (they enter the log when Claude takes them)
+function chatTailHtml(c) {
+  const q = c?.queued || [];
+  if (!c?.busy && !q.length) return `<div class="chat-tail"></div>`;
+  return `<div class="chat-tail">${c.busy ? `<div class="thinking">Claude думает</div>` : ""}`
+    + q.map((m) => (m.note ? `<div class="msg-note queued">${esc(m.text)}</div>`
+      : `<div class="msg-user queued">${esc(m.text)}${c.busy ? `<div class="qlabel">ждёт своей очереди</div>` : ""}</div>`)).join("")
+    + "</div>";
 }
 
 function updateSendButton() {
@@ -2339,7 +2355,8 @@ async function sendChat(text) {
 }
 
 // a message about a board goes to that board's chat (made on first use), even when it is not on screen
-async function sendToChat(text, sc = mode === "study" ? scene() : null) {
+// extra: { key, supersedes } — see askAboutUserLine
+async function sendToChat(text, sc = mode === "study" ? scene() : null, extra = {}) {
   if (isLive()) return; // no Claude during a live game
   setChatOpen(true);
   let cid;
@@ -2358,7 +2375,7 @@ async function sendToChat(text, sc = mode === "study" ? scene() : null) {
       if (!curChat()) await newChat();
       cid = ch.cur;
     }
-    await post(`/api/chat/${cid}/send`, { text });
+    await post(`/api/chat/${cid}/send`, { text, ...extra });
   } catch (err) { setStatus(String(err.message), true); }
 }
 
@@ -2449,10 +2466,15 @@ function onChatEvent(ev) {
     renderChatTabs();
     renderChatOpts();
     const log = $("#chat-log");
-    const think = $(".thinking", log);
-    const busy = curChat()?.busy;
-    if (busy && !think) { log.insertAdjacentHTML("beforeend", `<div class="thinking">Claude думает</div>`); log.scrollTop = log.scrollHeight; }
-    if (!busy && think) think.remove();
+    const tail = $(".chat-tail", log);
+    if (tail) {
+      const html = chatTailHtml(curChat());
+      if (tail.outerHTML !== html) {
+        const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+        tail.outerHTML = html;
+        if (atBottom || curChat()?.busy) log.scrollTop = log.scrollHeight;
+      }
+    }
     updateSendButton();
     return;
   }
@@ -2461,6 +2483,12 @@ function onChatEvent(ev) {
   if (ev.type === "chat_entry") {
     const i = list.findIndex((x) => x.id === ev.entry.id);
     if (i >= 0) list[i] = ev.entry; else list.push(ev.entry);
+    // a waiting message has just entered the log: take it off the queue now, the next chat_list confirms it
+    const meta = ch.list.find((c) => c.id === ev.chat);
+    if (i < 0 && meta?.queued?.length && (ev.entry.kind === "user" || ev.entry.kind === "note")) {
+      const j = meta.queued.findIndex((m) => m.text === ev.entry.text);
+      if (j >= 0) meta.queued.splice(j, 1);
+    }
     if (ev.chat !== ch.cur) return;
     const el = $(`[data-eid="${ev.entry.id}"]`, $("#chat-log"));
     if (el) el.outerHTML = entryHtml(ev.entry) || "<span hidden></span>";

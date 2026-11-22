@@ -289,6 +289,9 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .msg-error { color: var(--bad); font-size: 13px; }
 .thinking { font-size: 12px; color: var(--muted); }
 .thinking::after { content: "…"; animation: pulse 1s infinite; }
+.chat-tail { display: contents; }
+.msg-user.queued, .msg-note.queued { opacity: .6; }
+.msg-user .qlabel { font-size: 11px; opacity: .8; margin-top: 3px; text-align: right; }
 .chat-empty { color: var(--muted); display: grid; gap: 8px; }
 .chat-empty h3 { margin: 0; font: 650 15px var(--font-display); color: var(--ink); }
 .quick { display: flex; flex-wrap: wrap; gap: 5px; }

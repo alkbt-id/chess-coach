@@ -250,18 +250,18 @@ async def chat_new(request: Request):
     if b.get("scene") and sc is None:
         return err("no such board", 404)
     if sc and sc.get("chat") in CHATS.chats:
-        return JSONResponse(CHATS.chats[sc["chat"]].meta())
+        return JSONResponse(CHATS.chats[sc["chat"]].info())
     chat = await CHATS.create(b.get("model"), b.get("effort"))
     if sc:
         await board.bind_chat(sc, chat.id)
-    return JSONResponse(chat.meta())
+    return JSONResponse(chat.info())
 
 
 async def chat_get(request: Request):
     chat = CHATS.chats.get(request.path_params["cid"])
     if not chat:
         return err("no such chat", 404)
-    return JSONResponse({"meta": chat.meta(), "entries": chat.entries})
+    return JSONResponse({"meta": chat.info(), "entries": chat.entries})
 
 
 @guarded
@@ -270,7 +270,9 @@ async def chat_send(request: Request):
     text = (b.get("text") or "").strip()
     if not text:
         return err("empty message")
-    await CHATS.send(request.path_params["cid"], text)
+    sup = b.get("supersedes")
+    await CHATS.send(request.path_params["cid"], text, key=b.get("key") or None,
+                     supersedes=[str(k) for k in sup] if isinstance(sup, list) else None)
     return JSONResponse({"ok": True})
 
 

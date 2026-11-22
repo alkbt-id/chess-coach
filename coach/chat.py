@@ -310,7 +310,10 @@ class Chat:
             self.entries.append({"id": f"e{len(self.entries) + 1}", "ts": time.time(), "kind": "note",
                                  "text": "Ответ прервался: приложение перезапускалось. Отправь вопрос ещё раз."})
         self.seq = itertools.count(len(self.entries) + 1)
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        # Messages wait here until Claude takes them; only then they enter the log, so the log keeps the real order.
+        # A waiting message with a `key` can be replaced by a newer one (the user's line grew: ask once about all of it).
+        self.queue: asyncio.Queue[dict] = asyncio.Queue()
+        self.waiting: list[dict] = []
         self.worker: asyncio.Task | None = None
         self.client: ClaudeSDKClient | None = None
         self.busy = False
@@ -322,6 +325,10 @@ class Chat:
     def meta(self) -> dict:
         return {"id": self.id, "title": self.title, "model": self.model, "effort": self.effort, "session_id": self.session_id,
                 "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy}
+
+    def info(self) -> dict:
+        """meta + what waits for Claude (not saved: the queue lives only while the app runs)"""
+        return {**self.meta(), "queued": [{"text": w["note"] or w["text"], "note": bool(w["note"])} for w in self.waiting]}
 
     def save(self) -> None:
         save_json(CHATS_DIR / f"{self.id}.json", self.entries)
@@ -338,7 +345,7 @@ class ChatManager:
         save_json(DATA / "chats.json", [c.meta() for c in self.chats.values()])
 
     def listing(self) -> list[dict]:
-        return sorted((c.meta() for c in self.chats.values()), key=lambda m: -m["updated"])
+        return sorted((c.info() for c in self.chats.values()), key=lambda m: -m["updated"])
 
     async def emit_list(self) -> None:
         await broadcast({"type": "chat_list", "chats": self.listing()})
@@ -380,7 +387,7 @@ class ChatManager:
         chat = self.chats.get(cid)
         if not chat:
             return
-        if chat.busy:
+        if chat.busy or chat.waiting:
             chat.closing = True
         else:
             await self._stop_worker(chat)
@@ -393,26 +400,31 @@ class ChatManager:
         if effort and effort in EFFORTS and effort != chat.effort:
             chat.effort, changed = effort, True
         if changed:
-            if not chat.busy:
+            if not chat.busy and not chat.waiting:
                 await self._stop_worker(chat)  # restarts with the new settings on the next message
             self.save_meta()
             await self.emit_list()
 
-    async def send(self, cid: str, text: str, *, note: str | None = None) -> None:
-        """Queue a message for Claude. With `note`, the chat shows that short note instead of the text."""
+    async def send(self, cid: str, text: str, *, note: str | None = None, key: str | None = None,
+                   supersedes: list[str] | None = None) -> None:
+        """Queue a message for Claude. With `note`, the chat shows that short note instead of the text.
+        `key` names the message; a still waiting message whose key is in `supersedes` is replaced by this one
+        (the user played on: one question about the whole line instead of one per move)."""
         if S.lock:  # a live Lichess game: no outside help (coach/lichess.py)
             raise ValueError(S.lock)
         chat = self.chats[cid]
-        if note:
-            await self.add_entry(chat, {"kind": "note", "text": note})
-        else:
-            await self.add_entry(chat, {"kind": "user", "text": text})
-            if chat.title == "Новый чат":
-                chat.title = text.strip().split("\n")[0][:48] or "Чат"
+        if not note and chat.title == "Новый чат":
+            chat.title = text.strip().split("\n")[0][:48] or "Чат"
         chat.updated = time.time()
-        self.save_meta()
         chat.closing = False
-        chat.queue.put_nowait(text)
+        old = next((w for w in chat.waiting if w["key"] and w["key"] in (supersedes or [])), None)
+        if old:
+            old.update(text=text, note=note, key=key)
+        else:
+            item = {"text": text, "note": note, "key": key}
+            chat.waiting.append(item)
+            chat.queue.put_nowait(item)
+        self.save_meta()
         if chat.worker is None or chat.worker.done():
             chat.worker = asyncio.create_task(self._work(chat))
         await self.emit_list()
@@ -492,11 +504,16 @@ class ChatManager:
             async with ClaudeSDKClient(options=self._options(chat)) as client:
                 chat.client = client
                 while True:
-                    text = await chat.queue.get()
+                    item = await chat.queue.get()
+                    chat.waiting.remove(item)
+                    if item["note"]:
+                        await self.add_entry(chat, {"kind": "note", "text": item["note"]})
+                    else:
+                        await self.add_entry(chat, {"kind": "user", "text": item["text"]})
                     chat.busy = True
                     await self.emit_list()
                     try:
-                        await client.query(text)
+                        await client.query(item["text"])
                         async for msg in client.receive_response():
                             await self._handle(chat, msg)
                     except Exception as e:  # noqa: BLE001
