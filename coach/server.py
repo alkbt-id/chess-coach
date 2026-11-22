@@ -510,6 +510,7 @@ async def lifespan(_: Starlette):
     for chat in list(CHATS.chats.values()):
         await CHATS._stop_worker(chat)
     ENGINE.close()
+    repertoire.PLAY.close()
 
 
 app = Starlette(

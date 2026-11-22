@@ -560,3 +560,6 @@ a.btn { text-decoration: none; display: inline-block; }
 .rchip-wrap.on .rchip-x { border-color: var(--accent); background: var(--accent-soft); }
 .rchip-x:hover { color: var(--bad); }
 .rchip-x.confirm { color: var(--bad); font-weight: 600; }
+/* «Репертуар»: a game against the engine */
+.game-notes { display: grid; gap: 4px; }
+#game-elo { font-size: 12px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; }

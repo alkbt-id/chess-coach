@@ -987,7 +987,7 @@ function seqLine(seq) {
 // None during the repertoire drill: the frame would give away the moves to play from memory.
 function boardLineKeys() {
   const keys = new Set();
-  if (rep.drill) return keys;
+  if (rep.drill || rep.game) return keys;
   const sc = mode === "study" ? scene() : null;
   const root = sc ? sc.root : mode === "puzzle" ? pz.st?.tree : null;
   const fromRoot = (hit) => { // the nodes from the root to the first node `hit` accepts (main line first)
@@ -1072,7 +1072,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
-const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null };
+const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null, game: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
 
 const idxCache = new WeakMap();
@@ -1096,7 +1096,7 @@ function pathTo(sc, id) {
 }
 
 function studyBoard() {
-  if (repDrillBoard() || repTrialBoard()) return; // the repertoire drill, or a line being tried on a repertoire tree (REPERTOIRE)
+  if (repGameBoard() || repDrillBoard() || repTrialBoard()) return; // the repertoire drill, or a line being tried on a repertoire tree (REPERTOIRE)
   const node = curNode();
   const fen = node ? node.fen : START_FEN;
   const into = node && node === scene()?.root ? histOf(scene())?.plies.at(-1) : null; // the game's move into the board's start
@@ -1117,7 +1117,7 @@ async function onStudyMove(orig, dest) {
   let m;
   try { m = c.move({ from: orig, to: dest, promotion }); } catch { renderStudy(); return; }
   const uci = m.from + m.to + (m.promotion || "");
-  if (rep.on && (repDrillMove(uci) || (scene()?.rep && repTry(uci)))) return; // the drill's answer; on the repertoire a new move is only tried
+  if (rep.on && (repGameMove(uci) || repDrillMove(uci) || (scene()?.rep && repTry(uci)))) return; // the drill's answer; on the repertoire a new move is only tried
   try {
     let sc = scene();
     if (!sc) {
@@ -1183,7 +1183,7 @@ function waitScene(id) {
 }
 
 function studyStep(dir) {
-  if (rep.on && (rep.drill || repTrialStep(dir))) return; // no stepping through the moves during the drill
+  if (rep.on && (rep.drill || rep.game || repTrialStep(dir))) return; // no stepping through the moves during the drill
   const sc = scene();
   if (!sc) return;
   const e = tindex(sc).get(study.node) || { n: sc.root, p: null };
@@ -1421,14 +1421,14 @@ function treeHtml(root, cur, key = root.fen || root.id) {
 const ceval = { fen: null, res: null, deep: false, timer: null, seq: 0 };
 
 function engineArrow(fen) {
-  if (!study.engine || mode !== "study" || rep.drill || ceval.fen !== fen || !ceval.res?.lines?.[0]?.uci?.length) return [];
+  if (!study.engine || mode !== "study" || rep.drill || rep.game || ceval.fen !== fen || !ceval.res?.lines?.[0]?.uci?.length) return [];
   const u = ceval.res.lines[0].uci[0];
   return [{ orig: u.slice(0, 2), dest: u.slice(2, 4), brush: "paleBlue" }];
 }
 
 function requestEval() {
   clearTimeout(ceval.timer);
-  if (!study.engine || mode !== "study" || isLive() || rep.drill) return; // the drill: no engine hints
+  if (!study.engine || mode !== "study" || isLive() || rep.drill || rep.game) return; // the drill or a game: no engine hints
   const fen = shownFen;
   if (ceval.fen === fen && ceval.deep) return;
   if (ceval.fen !== fen) { ceval.fen = fen; ceval.res = null; ceval.deep = false; }
@@ -1476,7 +1476,7 @@ function renderCeval() {
 
 function renderEvalBar() {
   const bar = $("#evalbar");
-  const on = study.engine && mode === "study" && !isLive() && !rep.drill;
+  const on = study.engine && mode === "study" && !isLive() && !rep.drill && !rep.game;
   if (bar.hidden === on) { bar.hidden = !on; layout(); }
   if (!on) return;
   const l = ceval.fen === shownFen ? ceval.res?.lines?.[0] : null;
@@ -3406,8 +3406,17 @@ function repSectionAt(tree, id) {
 // ---- the panel ----
 function repPanelHtml() {
   const s = repSec();
+  if (rep.game) return repGameHtml();
   if (rep.drill) return repDrillHtml();
   return s ? repSectionHtml(s) : repTocHtml();
+}
+
+// «Сыграть с движком» and the opponent's strength (kept in this window)
+function repGameButton() {
+  const elo = repElo();
+  return `<div class="rep-drill"><button type="button" class="btn small" id="game-start">Сыграть с движком</button>
+    <label class="hint">соперник ≈ <select id="game-elo">${REP_ELO.map((e) => `<option value="${e}"${e === elo ? " selected" : ""}>${e}</option>`).join("")}</select></label>
+    <span class="hint">сначала по твоему дереву, потом Stockfish</span></div>`;
 }
 
 // «Тренировать»: what is due, or a run over everything when nothing is
@@ -3476,6 +3485,7 @@ function repSectionHtml(s) {
     ${kids.length ? `<div class="rep-chips"><span class="bt-label">Внутри:</span>${kids.map((k) => `<button type="button" class="rchip" data-sec="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div>` : ""}
     <div class="rep-chips"><span class="bt-label">Уроки:</span>${lessonChips}<button type="button" class="rchip add" id="rep-lesson-new">＋ Новый урок</button></div>
     ${repDrillButton({ section: s.id }, "drill-sec")}
+    ${repGameButton()}
     ${repGamesHtml(s)}
     <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."} Увидеть его — попроси в чате «покажи конспект».</p>`;
   const boards = inLesson ? boardsOf(ch.cur) : [];
@@ -3649,6 +3659,7 @@ function drillNode() { const t = drillTree(); return t ? tindex(t).get(rep.drill
 
 function drillStart(scope, practice = false) {
   repDrillStop(false);
+  repGameStop(false);
   rep.trial = null;
   closePreviewSilently();
   rep.drill = { scope, practice, again: new Set(), done: new Set(), ok: 0, fail: 0, line: null, over: false, timer: null };
@@ -3929,6 +3940,205 @@ async function repGamesClick(t) {
   }
 }
 
+// ---- a training game against the engine: the opponent plays the repertoire tree — the way to the section, then the
+// replies that need practice most (due in the drill), or the line Claude chose (repertoire_play) — and Stockfish at the
+// chosen strength once the tree runs out (/api/rep/engine). Leaving the tree is noted, never blocked; no engine hints
+// during the game; at the end the game goes onto a board of the section's lesson for Claude to review. ----
+const REP_ELO = [1350, 1500, 1700, 1900, 2200];
+function repElo() { try { return Number(localStorage.getItem("rep.elo")) || 1500; } catch { return 1500; } }
+const gameTree = () => study.scenes.find((x) => x.id === rep.game?.tree) || null;
+const gameFen = () => rep.game.fens.at(-1);
+function gameTreeAt(tree, fen) { // the node of a tree with this position (another move order too)
+  const k = fenKey(fen);
+  for (const { n } of tindex(tree).values()) if (fenKey(n.fen) === k) return n;
+  return null;
+}
+
+function gameStart(sid, plan = null) {
+  const s = repSec(sid);
+  const tree = s && repTree(s.color);
+  if (!tree) return;
+  repDrillStop(false);
+  rep.trial = null;
+  closePreviewSilently();
+  if (rep.game) clearTimeout(rep.game.timer);
+  const way = new Map();
+  let prev = tree.root;
+  for (const n of pathTo(tree, s.node)) { way.set(prev.id, n); prev = n; }
+  rep.game = { section: sid, color: s.color, tree: tree.id, way, plan: plan?.moves?.length ? plan.moves : null, comment: plan?.comment || "",
+    elo: plan?.elo || repElo(), ucis: [], sans: [], fens: [START_FEN], book: [], node: tree.root.id, notes: [], over: null, thinking: false, seq: 0, timer: null };
+  study.id = tree.id;
+  study.node = tree.root.id;
+  gameStep();
+}
+
+function repGameStop(render = true) {
+  const g = rep.game;
+  if (!g) return;
+  clearTimeout(g.timer);
+  g.seq++;
+  rep.game = null;
+  if (!render || !rep.on || mode !== "study") return;
+  const s = repSec();
+  study.id = repTree(s?.color || rep.color)?.id ?? null;
+  study.node = s ? s.node : "root";
+  renderStudy();
+}
+
+function gameResult(c) {
+  if (c.isCheckmate()) return { score: turnOf(c.fen()) === rep.game.color ? 0 : 1, text: turnOf(c.fen()) === rep.game.color ? "Мат — ты проиграл." : "Мат — ты выиграл!" };
+  const why = c.isStalemate() ? "пат" : c.isThreefoldRepetition() ? "троекратное повторение" : c.isInsufficientMaterial() ? "мало материала" : "правило 50 ходов";
+  return { score: 0.5, text: `Ничья: ${why}.` };
+}
+
+// the opponent's next move from the repertoire: Claude's line while the game follows it, else the tree (null: none)
+function gameBookReply() {
+  const g = rep.game;
+  const n = g.ucis.length;
+  if (g.plan && g.plan.length > n && g.plan.slice(0, n).every((u, i) => u === g.ucis[i])) return g.plan[n];
+  const node = g.node && tindex(gameTree()).get(g.node)?.n;
+  if (!node?.children.length) return null;
+  const w = g.way.get(node.id);
+  if (w) return w.uci;
+  return pickWeighted(node.children, (c) => 1 + 2 * drillWalk(g.color, c, new Set(), null, drillDue)).uci;
+}
+
+// after every move: the game may be over; on the opponent's turn it plays from the repertoire or asks Stockfish
+function gameStep() {
+  const g = rep.game;
+  if (!g) return;
+  const c = new Chess(gameFen());
+  if (c.isGameOver()) { g.over = gameResult(c); renderStudy(); return; }
+  renderStudy();
+  if (turnOf(gameFen()) === g.color || g.over) return;
+  const my = ++g.seq;
+  const book = gameBookReply();
+  if (book) {
+    g.timer = setTimeout(() => { if (rep.game === g && g.seq === my) gamePlay(book, true); }, 550);
+    return;
+  }
+  g.thinking = true;
+  renderStudy();
+  post("/api/rep/engine", { fen: gameFen(), elo: g.elo })
+    .then((r) => { if (rep.game !== g || g.seq !== my) return; g.thinking = false; gamePlay(r.uci, false); })
+    .catch((err) => { if (rep.game === g) { g.thinking = false; renderStudy(); } setStatus(String(err.message), true); });
+}
+
+function gamePlay(uci, book) {
+  const g = rep.game;
+  const before = gameFen();
+  const c = new Chess(before);
+  let m;
+  try { m = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }); } catch { renderStudy(); return false; }
+  const tree = gameTree();
+  const node = g.node && tindex(tree).get(g.node)?.n;
+  const ply = g.ucis.length + 1;
+  const mine = turnOf(before) === g.color;
+  if (node) { // still in the tree: does the move stay in it?
+    const next = node.children.find((x) => x.uci === uci) || gameTreeAt(tree, c.fen());
+    if (next) g.node = next.id;
+    else {
+      g.node = null;
+      const way = g.ucis.slice();
+      if (mine && node.children.length) g.notes.push({ ply, kind: "user", way, played: uci, want: node.children[0].uci, text: "Ты ушёл из репертуара" });
+      else if (mine) g.notes.push({ ply, kind: "end", way, text: "Здесь твоя подготовка кончается — дальше думаешь сам" });
+      else if (book) g.notes.push({ ply, kind: "opp", way, played: uci, text: "Соперник сыграл ход, которого нет в твоём дереве" });
+      else g.notes.push({ ply, kind: "end", way, text: `Подготовка кончилась — дальше играет Stockfish ≈${g.elo}` });
+    }
+  }
+  g.ucis.push(m.from + m.to + (m.promotion || ""));
+  g.sans.push(m.san);
+  g.fens.push(c.fen());
+  g.book.push(book);
+  moveSound(m.san);
+  gameStep();
+  return true;
+}
+
+function repGameMove(uci) { // true: the game took the move
+  const g = rep.on ? rep.game : null;
+  if (!g) return false;
+  if (g.over || g.thinking || turnOf(gameFen()) !== g.color) { renderStudy(); return true; }
+  gamePlay(uci, false);
+  return true;
+}
+
+function gameTakeback() { // back to the user's last turn
+  const g = rep.game;
+  if (!g || g.thinking) return;
+  clearTimeout(g.timer);
+  g.seq++;
+  const drop = () => { g.ucis.pop(); g.sans.pop(); g.fens.pop(); g.book.pop(); };
+  if (g.ucis.length && turnOf(gameFen()) === g.color) drop(); // the opponent answered: take that back too
+  if (g.ucis.length) drop();
+  while (g.ucis.length && turnOf(gameFen()) !== g.color) drop();
+  g.over = null;
+  g.notes = g.notes.filter((x) => x.ply <= g.ucis.length);
+  let node = gameTree().root; // where the game is in the tree again
+  for (const u of g.ucis) {
+    node = node && (node.children.find((x) => x.uci === u) || null);
+    if (!node) break;
+  }
+  g.node = node?.id ?? null;
+  gameStep();
+}
+
+function repGameBoard() {
+  const g = rep.on ? rep.game : null;
+  if (!g) return false;
+  const fen = gameFen();
+  const last = g.ucis.at(-1);
+  const can = !g.over && !g.thinking && turnOf(fen) === g.color;
+  setBoard({ fen, orientation: boardOrientation(), lastMove: last ? sq(last) : undefined,
+    movable: can ? { color: g.color, dests: legalDests(fen), after: onStudyMove } : null });
+  return true;
+}
+
+function repGameHtml() {
+  const g = rep.game;
+  const s = repSec(g.section);
+  const myTurn = turnOf(gameFen()) === g.color;
+  const inBook = g.book.lastIndexOf(true) + 1;
+  const status = g.over ? `<div class="drill-box ${g.over.score === 1 ? "ok" : g.over.score === 0 ? "bad" : ""}">${esc(g.over.text)}</div>`
+    : g.thinking ? `<div class="drill-box">Stockfish думает…</div>`
+      : `<div class="drill-box">${myTurn ? "Твой ход" : "Соперник ходит…"}</div>`;
+  const notes = g.notes.map((x) => {
+    const at = x.way.length;
+    const extra = x.kind === "user" ? `: сыграл ${repLineHtml([...x.way, x.played], { from: at })}, а в дереве ${repLineHtml([...x.way, x.want], { from: at })}`
+      : x.kind === "opp" ? `: ${repLineHtml([...x.way, x.played], { from: at })}` : "";
+    return `<div class="rg-row ${x.kind === "user" ? "user" : x.kind === "opp" ? "opponent" : ""}"><span>${esc(x.text)}${extra}.</span></div>`;
+  }).join("");
+  const actions = g.over
+    ? `<button type="button" class="btn small primary" id="game-review">Разобрать с Claude</button><button type="button" class="btn small" id="game-again">Ещё партию</button><button type="button" class="btn small" id="game-stop2">К разделу</button>`
+    : `<button type="button" class="btn small" id="game-back"${g.ucis.length ? "" : " disabled"}>Ход назад</button><button type="button" class="btn small" id="game-resign">Сдаться</button>`;
+  return `<div class="rep-crumbs"><button type="button" class="link-btn" id="game-stop">← Закончить партию</button></div>
+    <h1 class="title">Партия с движком: ${esc(s?.name || "")}</h1>
+    <p class="hint">Ты играешь ${g.color === "white" ? "белыми" : "чёрными"}. Соперник ходит по твоему дереву${g.plan ? " и по варианту, который выбрал Claude" : ""}, потом — Stockfish ≈${g.elo}.${inBook ? ` По дереву сыграно ${inBook} ${plural(inBook, "полуход", "полухода", "полуходов")}.` : ""}</p>
+    ${g.comment ? `<div class="rep-trial"><div><b>Claude:</b> ${esc(g.comment)}</div></div>` : ""}
+    ${status}
+    <div class="rep-path drill-line">${repLineHtml(g.ucis) || "начальная позиция"}</div>
+    ${notes ? `<div class="game-notes">${notes}</div>` : ""}
+    <div class="rep-actions">${actions}</div>`;
+}
+
+// the finished game: onto a board of the section's lesson (made if there is none), and Claude is asked to review it
+async function gameReview() {
+  const g = rep.game;
+  const s = repSec(g.section);
+  if (!g || !s) return;
+  rep.section = s.id;
+  repRemember();
+  repGameStop(false);
+  setChatOpen(true);
+  let cid = lessonSection(ch.cur) === s.id ? ch.cur : null;
+  if (!cid) cid = (await newLesson()).id;
+  const moves = g.sans.map((x, i) => (i % 2 === 0 ? `${i / 2 + 1}.` : "") + x).join(" ");
+  const r = await post("/api/scene", { title: `Партия с движком ≈${g.elo}`, position: "start", lines: [{ moves }], chat: cid, orientation: g.color });
+  const notes = g.notes.map((x) => `- ${x.text} (полуход ${x.ply})`).join("\n");
+  await post(`/api/chat/${cid}/send`, { text: `Разбери мою тренировочную партию с движком ≈${g.elo} в разделе «${s.name}» — она на доске ${r.scene}. ${g.over ? `Итог: ${g.over.text}` : ""}\n`
+    + `Где партия ушла из моего репертуара и что надо было играть, потом главные ошибки после дебюта. Если в дереве не хватает ответа на ход соперника — предложи, что записать.${notes ? `\nОтметки по ходу партии:\n${notes}` : ""}` });
+}
+
 // ---- moving around ----
 function repRemember() { try { localStorage.setItem("rep.section", rep.section || ""); } catch {} }
 
@@ -4063,7 +4273,7 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del]");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del], #game-start, #game-stop, #game-stop2, #game-back, #game-resign, #game-review, #game-again");
   if (!t) return;
   if (t.dataset.sec && e.target.closest(".mvl")) e.stopPropagation(); // the row opens its section; its moves only show on hover
   const s = repSec();
@@ -4072,6 +4282,17 @@ $("#panel").addEventListener("click", async (e) => {
     else if (t.dataset.repToc !== undefined) repToc();
     else if (t.dataset.lesson) openChat(t.dataset.lesson);
     else if (t.dataset.lessonDel) await repDeleteLesson(t.dataset.lessonDel);
+    else if (t.id === "game-start" && s) gameStart(s.id);
+    else if (t.id === "game-again" && rep.game) gameStart(rep.game.section);
+    else if (t.id === "game-stop" || t.id === "game-stop2") repGameStop();
+    else if (t.id === "game-back") gameTakeback();
+    else if (t.id === "game-resign" && rep.game && !rep.game.over) {
+      clearTimeout(rep.game.timer);
+      rep.game.seq++;
+      rep.game.thinking = false;
+      rep.game.over = { score: 0, text: "Ты сдался." };
+      renderStudy();
+    } else if (t.id === "game-review") await gameReview();
     else if (t.dataset.repTree !== undefined && s) {
       closePreviewSilently();
       study.id = repTree(s.color)?.id ?? null;
@@ -4138,6 +4359,10 @@ $("#panel").addEventListener("submit", async (e) => {
 $("#panel").addEventListener("keydown", (e) => {
   if (e.key === "Escape" && rep.on && rep.rename) { rep.rename = false; renderStudyPanel(); }
 });
+$("#panel").addEventListener("change", (e) => {
+  if (e.target.id !== "game-elo") return;
+  try { localStorage.setItem("rep.elo", e.target.value); } catch {}
+});
 
 // =====================================================================
 // modes, keys, server events
@@ -4160,7 +4385,7 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   closePreviewSilently();
   const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
   rep.on = m === "rep";
-  if (!rep.on) repDrillStop(false);
+  if (!rep.on) { repDrillStop(false); repGameStop(false); }
   if (rep.on) m = "study";
   mode = m;
   $$(".mode").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === view)));
@@ -4320,6 +4545,14 @@ async function onEvent(ev) {
       break;
     }
     case "chat_list": case "chat_entry": case "chat_delta": onChatEvent(ev); break;
+    case "rep_play": // Claude of the open chat started a training game
+      if (ev.by_chat && ev.by_chat === ch.cur && !isLive() && repSec(ev.section)) {
+        rep.section = ev.section;
+        repRemember();
+        if (!rep.on || mode !== "study") setMode("rep", { save: false });
+        gameStart(ev.section, { moves: ev.moves, comment: ev.comment, elo: ev.elo });
+      }
+      break;
     case "rep_drill": rep.data.drill[ev.key] = ev.card; updateCounts(); if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); break;
     case "rep": Object.assign(rep.data, ev.rep); if (rep.on && mode === "study") { renderStudyPanel(); if (!curChat()) renderChatLog(); } break;
     case "reload": location.reload(); break;

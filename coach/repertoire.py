@@ -23,6 +23,9 @@
   time it was written; 0 = before this was kept); earlier games, and moves the tree only took from the games, are
   habits («раньше играл иначе»), shown apart. A section lists its games so, and
   a finished live game says it under the result (the window asks after the game, never during it).
+- A training game against the engine (app.js REPERTOIRE): the window plays the opponent's moves of the tree (or of
+  the line Claude chose with repertoire_play), then asks /api/rep/engine for Stockfish's move at a limited strength
+  (UCI_Elo) — a Stockfish process of its own, so the analysis engine keeps full strength.
 - While a live Lichess game is on (S.lock) the repertoire is closed: it is opening preparation.
 """
 
@@ -30,10 +33,13 @@ import asyncio
 import contextlib
 import json
 import re
+import threading
 import time
 from collections import Counter
 
+import anyio
 import chess
+import chess.engine
 from claude_agent_sdk import tool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -41,6 +47,7 @@ from starlette.routing import Route
 
 from . import board, openings, review, scenes
 from .board import DATA, S, broadcast, load_json, save_json
+from .engine import STOCKFISH
 from .scenes import SceneError
 
 FILE = DATA / "repertoire.json"
@@ -488,6 +495,43 @@ class Repertoire:
 
 
 REP = Repertoire()
+
+
+class PlayEngine:
+    """Stockfish as the opponent of training games: its own process, its strength limited to about `elo`."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._e: chess.engine.SimpleEngine | None = None
+
+    def move(self, fen: str, elo: int) -> chess.Move:
+        board = chess.Board(fen)
+        with self._lock:
+            for attempt in (1, 2):
+                try:
+                    if self._e is None:
+                        self._e = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
+                    opt = self._e.options.get("UCI_Elo")
+                    if opt and elo < (opt.max or 3190):
+                        self._e.configure({"UCI_LimitStrength": True, "UCI_Elo": max(opt.min or 1320, elo)})
+                    else:
+                        self._e.configure({"UCI_LimitStrength": False})
+                    return self._e.play(board, chess.engine.Limit(time=0.4)).move
+                except chess.engine.EngineTerminatedError:
+                    self._e = None  # Stockfish died: start it again once
+                    if attempt == 2:
+                        raise
+        raise SceneError("no engine")
+
+    def close(self) -> None:
+        with self._lock:
+            if self._e is not None:
+                with contextlib.suppress(Exception):
+                    self._e.quit()
+                self._e = None
+
+
+PLAY = PlayEngine()
 board.EXTERNAL.update(find=REP.tree_by_id, save=REP.save, guard_delete=REP.guard_delete)
 
 
@@ -506,6 +550,8 @@ leading to a section may come from the user's games. Lessons are chats bound to 
 - `repertoire_state` also compares the user's games with a section's tree: where the user left it after the move
   was written into the tree (worth a lesson: they forgot it), where they played otherwise before it was written (an
   old habit, not forgetting), which opponent replies the tree lacks, where the preparation ends.
+- `repertoire_play` starts a training game against the engine on the user's board, steered into the line you give
+  (e.g. one the user keeps missing in games or in the drill); offer it when the user wants to play a line out.
 - The user drills the repertoire from memory in the app (the app plays the opponent's moves, the user their own);
   `repertoire_state` shows a section's drill results — positions they often miss are worth a lesson.
 - `repertoire_notes` is your memory between lessons (each chat is a separate session). The user does not see the
@@ -650,7 +696,28 @@ def tools(chat_id: str) -> list:
         await REP.emit()
         return res
 
+    async def play(args):
+        sec = REP.section(args["section"]) if args.get("section") else REP.lesson_section(chat_id)
+        if sec is None:
+            raise SceneError("which section? pass `section`")
+        b, ucis = chess.Board(), []
+        for tok in scenes.split_moves(args.get("moves") or ""):
+            m = scenes.parse_move(b, tok)
+            ucis.append(m.uci())
+            b.push(m)
+        elo = int(args["elo"]) if args.get("elo") else None
+        await broadcast({"type": "rep_play", "section": sec["id"], "moves": ucis, "elo": elo, "comment": args.get("comment") or "",
+                         "by_chat": chat_id})
+        return {"ok": True, "section": sec["name"], "user_plays": sec["color"], "line": san_path(_san_nodes(chess.Board(), ucis)) or "(the tree)",
+                "note": "the game is on the user's board now; its moves do not come to you — the user tells you how it went or asks for a review"}
+
     return [
+        tool("repertoire_play", "Start a training game against the engine on the user's board, in a section (default: this "
+             "lesson's). `moves`: the line from the initial position to steer into (both sides' moves, e.g. a variation the "
+             "user keeps missing); the app plays the opponent's moves of it while the user follows it, then the tree's, then "
+             "Stockfish at about `elo` (default: the user's own choice). `comment`: a short goal shown above the game.",
+             _schema({"section": SECTION, "moves": {"type": "string"}, "elo": {"type": "integer", "minimum": 1320, "maximum": 3200},
+                      "comment": {"type": "string"}}))(guarded(play)),
         tool("repertoire_state", "The user's repertoire: sections (with games and score % in them), the general notes; for a "
              "section (default: this lesson's) its moves, its tree with node ids, your notes, the user's games in it and the "
              "moves they played there.", _schema({"section": SECTION}))(guarded(state)),
@@ -797,6 +864,18 @@ async def http_games(b: dict):
 
 
 @route
+async def http_engine(b: dict):
+    fen = str(b.get("fen") or "")
+    try:
+        chess.Board(fen)
+    except ValueError as e:
+        raise SceneError(f"bad FEN: {e}") from e
+    elo = max(1320, min(int(b.get("elo") or 1500), 3200))
+    mv = await anyio.to_thread.run_sync(PLAY.move, fen, elo)
+    return {"uci": mv.uci(), "san": chess.Board(fen).san(mv)}
+
+
+@route
 async def http_check(b: dict):
     color = b.get("color")
     if color not in COLORS:
@@ -821,4 +900,5 @@ ROUTES = [
     Route("/api/rep/drill", http_drill, methods=["POST"]),
     Route("/api/rep/games", http_games, methods=["POST"]),
     Route("/api/rep/check", http_check, methods=["POST"]),
+    Route("/api/rep/engine", http_engine, methods=["POST"]),
 ]
