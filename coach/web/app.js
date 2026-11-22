@@ -548,6 +548,7 @@ document.addEventListener("click", (e) => {
   const i = Number(m.dataset.i);
   if (seq.dataset.line) { openPreview(LINES.get(seq.dataset.line), i, "Вариант"); return; }
   const line = resolveMoves($$(".mvl", seq).map((x) => x.textContent));
+  if (line?.scene) setScene(line.scene); // the line is about another board of this chat: that board comes on screen
   if (line?.nodes && mode === "study" && i < line.nodes.length) {
     closePreviewSilently();
     study.node = line.nodes[i].id;
@@ -556,7 +557,7 @@ document.addEventListener("click", (e) => {
   }
   if (!line) {
     m.classList.add("miss");
-    m.title = "Этот ход нельзя сыграть ни в одной позиции диаграммы";
+    m.title = "Этот ход нельзя сыграть ни в одной позиции досок этого чата";
     setTimeout(() => m.classList.remove("miss"), 1500);
     return;
   }
@@ -607,9 +608,10 @@ function playSan(fen, toks) {
   return playLine(fen, ucis).plies;
 }
 
-// moves that are already in the move tree on screen: follow the tree (current path and main line first)
-function treeMatch(toks) {
-  const root = mode === "study" ? scene()?.root : pz.st?.tree;
+// moves that are already in the move tree on screen (or of the board `other`): follow the tree (current path and main line first)
+function treeMatch(toks, other = null) {
+  const sc = other || (mode === "study" ? scene() : null);
+  const root = sc ? sc.root : mode === "study" ? null : pz.st?.tree;
   if (!root) return null;
   const parent = new Map();
   const order = [];
@@ -617,7 +619,7 @@ function treeMatch(toks) {
   const push = (n) => { if (n && !seen.has(n.id)) { seen.add(n.id); order.push(n); } };
   const walk = (n) => n.children.forEach((c) => { parent.set(c.id, n); walk(c); });
   walk(root);
-  if (mode === "study") pathTo(scene(), study.node).forEach(push);
+  if (sc && !other) pathTo(sc, study.node).forEach(push);
   for (let n = root.children[0]; n; n = n.children[0]) push(n);
   const all = (n) => n.children.forEach((c) => { push(c); all(c); });
   all(root);
@@ -639,15 +641,40 @@ function treeMatch(toks) {
   return null;
 }
 
+// in order: the tree on screen, the tree of another board of this chat, the rules from a position on screen,
+// the rules from a position of another board of this chat
 function resolveMoves(rawToks) {
   const toks = rawToks.map(parseTok);
-  const inTree = treeMatch(toks);
-  if (inTree) return inTree;
+  return treeMatch(toks) || otherBoard(toks, true) || byRules(toks) || otherBoard(toks, false);
+}
+
+// a chat has several boards: a line from an earlier message may belong to another of them (`scene` says which)
+function otherBoard(toks, treeOnly) {
+  if (mode !== "study") return null;
+  const fits = numFen(toks[0]);
+  for (const sc of boardsOf(ch.cur).reverse()) {
+    if (sc.id === study.id) continue;
+    if (treeOnly) {
+      const inTree = treeMatch(toks, sc);
+      if (inTree) return { ...inTree, scene: sc.id };
+    } else if (fits) { // an unnumbered move fits too many positions of a board not on screen
+      for (const { n } of tindex(sc).values()) {
+        const plies = fits(n.fen) && playSan(n.fen, toks);
+        if (plies?.length) return { start: n.fen, plies, scene: sc.id };
+      }
+    }
+  }
+  return null;
+}
+
+// a numbered first move ("12...Nf6") fits only positions with that move number and side to move
+const numFen = (first) => (first.num ? (f) => { const [, side, , , , full] = f.split(" "); return Number(full) === first.num && (side === "b") === first.black; } : null);
+
+function byRules(toks) {
   const first = toks[0];
   let cands;
   if (first.num) {
-    const fits = (f) => { const [, side, , , , full] = f.split(" "); return Number(full) === first.num && (side === "b") === first.black; };
-    cands = candidateFens().filter(fits);
+    cands = candidateFens().filter(numFen(first));
   } else {
     cands = [shownFen, ...(mode === "puzzle" && pz.cur ? [pz.cur.fen] : [])];
   }
@@ -800,7 +827,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 // STUDY — Lichess-style analysis with a move tree
 // =====================================================================
-const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false };
+const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
 
 const idxCache = new WeakMap();
@@ -888,7 +915,7 @@ function askAboutUserLine() {
   const before = path.slice(0, k);
   const where = before.length ? `после ${moveText(before)}` : "из начальной позиции диаграммы";
   sendToChat(
-    `Мой вариант: ${moveText(mine)} (${where}; диаграмма «${sc.title}», узел ${node.id}).\n` +
+    `Мой вариант: ${moveText(mine)} (${where}; доска «${sc.title}» ${sc.id}, узел ${node.id}).\n` +
     "Посчитай его движком и разбери: коротко в чате и на доске — комментарий и стрелки к моему ходу, " +
     "лучший ответ соперника веткой из этого узла, и если мой ход хуже — какой был лучше.",
   );
@@ -926,12 +953,17 @@ function setScene(id, node = "root") {
   followBoard();
 }
 
-// ---- one chat — one board: the board keeps its chat's id (sc.chat), a chat has at most one board.
-// In «Разбор» the chat panel shows the chat of the board on screen, and opening a chat brings its board. ----
+// ---- a chat and its boards: a board keeps its chat's id (sc.chat), a chat may have several boards, each with its own tree.
+// In «Разбор» the chat panel shows the chat of the board on screen; opening a chat brings its active board (the one of
+// that chat last on screen or made last: study.chatBoard, kept by the server), and tabs above the tree switch boards. ----
 const chatOf = (sc) => (sc?.chat && ch.list.some((c) => c.id === sc.chat) ? sc.chat : null);
-const boardOf = (cid) => (cid ? study.scenes.findLast((s) => s.chat === cid) || null : null);
-// a board made on the empty board of a chat that has none becomes that chat's board
-const claimChat = () => (ch.cur && !boardOf(ch.cur) ? ch.cur : undefined);
+const boardsOf = (cid) => (cid ? study.scenes.filter((s) => s.chat === cid) : []);
+function activeBoard(cid) {
+  const own = boardsOf(cid);
+  return own.find((s) => s.id === study.chatBoard[cid]) || own.at(-1) || null;
+}
+// a board made while a chat is open is one more board of that chat
+const claimChat = () => (ch.list.some((c) => c.id === ch.cur) ? ch.cur : undefined);
 
 function followBoard() {
   if (mode !== "study" || isLive()) return;
@@ -942,7 +974,7 @@ function followBoard() {
 
 function followChat() {
   if (mode !== "study" || isLive()) return;
-  const id = boardOf(ch.cur)?.id ?? null;
+  const id = activeBoard(ch.cur)?.id ?? null;
   if (id === study.id) return;
   study.id = id;
   study.node = "root";
@@ -1086,14 +1118,18 @@ function studyPanelHtml() {
   }
   const idx = study.scenes.indexOf(sc);
   const opts = study.scenes.map((x, i) => `<option value="${esc(x.id)}"${x === sc ? " selected" : ""}>${i + 1}. ${esc(x.title)}</option>`).reverse().join("");
+  const own = boardsOf(chatOf(sc));
+  const tabs = own.length > 1 ? `<div class="board-tabs" role="tablist" aria-label="Доски этого чата"><span class="bt-label">Доски чата:</span>
+      ${own.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}</div>` : "";
   return `<div class="scene-nav">
       <button type="button" class="icon" data-scene-step="-1" title="Предыдущая диаграмма" ${idx <= 0 ? "disabled" : ""}>‹</button>
       <select id="scene-select" aria-label="Диаграммы">${opts}</select>
       <button type="button" class="icon" data-scene-step="1" title="Следующая диаграмма" ${idx >= study.scenes.length - 1 ? "disabled" : ""}>›</button>
-      <button type="button" class="icon" id="newpos-btn" title="Новая доска: начальная позиция, FEN или ходы">Новая</button>
-      <button type="button" class="icon" id="scene-del" title="Удалить эту диаграмму">✕</button>
+      <button type="button" class="icon" id="newpos-btn" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">Новая</button>
+      <button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button>
     </div>
     ${newpos}
+    ${tabs}
     <h1 class="title">${esc(sc.title)}</h1>
     ${reviewHtml(sc)}
     ${cevalHtml()}
@@ -1135,6 +1171,8 @@ function renderStudyPanel() {
 
 function renderStudy() {
   if (mode !== "study") return;
+  const cur = scene();
+  if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
   if (!preview) studyBoard();
   renderStudyPanel();
   $("#meta").innerHTML = "";
@@ -1159,6 +1197,8 @@ $("#panel").addEventListener("click", async (e) => {
   } else if (t.classList.contains("pvm")) {
     const l = ceval.res?.lines?.[Number(t.dataset.pv)];
     if (l) openPreview(playLine(ceval.res.fen, l.uci), Number(t.dataset.i), "Линия Stockfish");
+  } else if (t.dataset.board) {
+    if (t.dataset.board !== study.id) setScene(t.dataset.board);
   } else if (t.dataset.sceneStep) {
     const i = study.scenes.indexOf(scene()) + Number(t.dataset.sceneStep);
     if (study.scenes[i]) setScene(study.scenes[i].id);
@@ -1179,9 +1219,13 @@ $("#panel").addEventListener("click", async (e) => {
       return;
     }
     const i = study.scenes.indexOf(sc);
+    const own = boardsOf(chatOf(sc));
+    const j = own.indexOf(sc);
     study.scenes.splice(i, 1);
     post("/api/scene/delete", { id: sc.id });
-    setScene(study.scenes[Math.min(i, study.scenes.length - 1)]?.id ?? null);
+    if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat
+    else if (chatOf(sc)) { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
+    else setScene(study.scenes[Math.min(i, study.scenes.length - 1)]?.id ?? null);
   } else if (t.id === "newpos-btn") {
     study.newpos = !study.newpos;
     renderStudyPanel();
@@ -2185,8 +2229,8 @@ async function sendToChat(text, sc = mode === "study" ? scene() : null) {
 function askClaude(text) {
   if (isLive()) return;
   setChatOpen(true);
-  // a puzzle is a new topic: not into a chat that has its own board (Claude's show there would be refused)
-  if (mode !== "study" && boardOf(ch.cur)) openChat(null, { follow: false });
+  // a puzzle is a new topic: a fresh chat, not one that is about its boards
+  if (mode !== "study" && boardsOf(ch.cur).length) openChat(null, { follow: false });
   const ta = $("#chat-text");
   ta.value = text;
   autosize();
@@ -2896,7 +2940,7 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   $("#foot").hidden = m === "puzzle"; // nothing left there for puzzles (the flip button sits under the board)
   if (m === "study") {
     renderStudy();
-    if (follow === "chat" && boardOf(ch.cur)) followChat(); else followBoard();
+    if (follow === "chat" && boardsOf(ch.cur).length) followChat(); else followBoard();
   } else if (m === "play") renderPlay(); else renderPuzzle();
   if (save) http.send("PUT", "/api/settings", { mode: m }).catch(() => {});
 }
@@ -2974,7 +3018,7 @@ async function onEvent(ev) {
       upsertScene(ev.scene);
       checkPendingClaude(ev.scene);
       // a chat working in the background does not take the board away from the chat the user is in
-      if (ev.goto && !isLive() && (!chatOf(ev.scene) || [ev.scene.chat, ev.scene.from].includes(ch.cur) || ev.scene.id === study.id)) {
+      if (ev.goto && !isLive() && (!chatOf(ev.scene) || ev.scene.chat === ch.cur || ev.scene.id === study.id)) {
         closePreviewSilently();
         study.id = ev.scene.id;
         study.node = ev.goto;
@@ -2997,9 +3041,14 @@ async function onEvent(ev) {
     case "scenes": {
       const s = await http.get("/api/state");
       study.scenes = s.study.scenes;
-      if (!scene()) setScene(s.study.current); else if (mode === "study") renderStudy();
+      if (scene() || !study.id) { if (mode === "study") renderStudy(); } // nothing gone from the screen (an empty board stays empty)
+      else if (mode === "study" && chatOf({ chat: ch.cur })) { study.id = activeBoard(ch.cur)?.id ?? null; study.node = "root"; renderStudy(); }
+      else setScene(s.study.current); // the board on screen was deleted in another window
       break;
     }
+    case "chat_board": // the board a chat's Claude works on by default; opening that chat brings it
+      study.chatBoard[ev.chat] = ev.scene;
+      break;
     case "mode":
       if (ev.puzzle && pz.byId[ev.puzzle]) { mode = ev.mode; loadPuzzle(pz.byId[ev.puzzle]); }
       setMode(ev.mode, { save: false });
@@ -3056,6 +3105,7 @@ async function init() {
   try {
     const [s, list] = await Promise.all([http.get("/api/state"), http.get("/api/puzzles")]);
     study.scenes = s.study.scenes || [];
+    study.chatBoard = s.settings.chat_boards || {};
     study.id = s.study.current || study.scenes.at(-1)?.id || null;
     study.engine = !!s.settings.engine;
     study.autoAsk = s.settings.autoAsk !== false;

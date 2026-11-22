@@ -79,22 +79,54 @@ def find_scene(sid: str | None) -> dict | None:
     return next((s for s in S.study["scenes"] if s["id"] == sid), None) if sid else None
 
 
-# One chat — one board: a board keeps the id of its chat in sc["chat"]; a chat has at most one board.
-def chat_scene(chat_id: str | None) -> dict | None:
-    """The board of a chat (the latest one, for chats from before the rule that made several)."""
-    if not chat_id:
-        return None
-    return next((s for s in reversed(S.study["scenes"]) if s.get("chat") == chat_id), None)
+# A board belongs to one chat (sc["chat"]); a chat may have several boards, the user switches between them.
+# The chat's active board (S.settings["chat_boards"][chat]) is the one its Claude works on by default:
+# the board of that chat the user switched to last, or the one Claude made or picked last.
+def chat_scenes(chat_id: str | None) -> list[dict]:
+    return [s for s in S.study["scenes"] if chat_id and s.get("chat") == chat_id]
+
+
+def chat_scene(chat_id: str | None, sid: str | None = None) -> dict | None:
+    """A board of the chat: `sid` (an error if it is not this chat's), else its active board, else its latest."""
+    own = chat_scenes(chat_id)
+    if sid:
+        sc = next((s for s in own if s["id"] == sid), None)
+        if sc is None:
+            ids = ", ".join(f"{s['id']} «{s['title']}»" for s in own) or "none yet"
+            raise SceneError(f"board {sid!r} is not one of this chat's boards ({ids})")
+        return sc
+    active = (S.settings.get("chat_boards") or {}).get(chat_id)
+    return next((s for s in own if s["id"] == active), None) or (own[-1] if own else None)
+
+
+async def set_chat_board(chat_id: str, sid: str) -> None:
+    boards = S.settings.setdefault("chat_boards", {})
+    if boards.get(chat_id) == sid:
+        return
+    boards[chat_id] = sid
+    S.save_settings()
+    await broadcast({"type": "chat_board", "chat": chat_id, "scene": sid})
+
+
+async def note_view(prev_sid: str | None, sid: str | None) -> None:
+    """The window switched boards: a board of a chat becomes that chat's active board.
+    Only a switch counts, so a late report of the old board does not undo Claude's new one."""
+    sc = find_scene(sid) if sid != prev_sid else None
+    if sc and sc.get("chat"):
+        await set_chat_board(sc["chat"], sc["id"])
 
 
 async def bind_chat(sc: dict, chat_id: str) -> None:
     sc["chat"] = chat_id
     S.save_study()
     await broadcast({"type": "scene", "scene": sc, "goto": None})
+    await set_chat_board(chat_id, sc["id"])
 
 
 async def unbind_chat(chat_id: str) -> None:
     """A deleted chat leaves its boards without a chat; the next question about one starts a new chat."""
+    if (S.settings.get("chat_boards") or {}).pop(chat_id, None):
+        S.save_settings()
     for sc in S.study["scenes"]:
         if sc.get("chat") == chat_id:
             sc.pop("chat")
@@ -129,14 +161,10 @@ def current_fen() -> str | None:
 
 # ---------------- operations ----------------
 async def op_show(b: dict) -> dict:
-    """A new board; with `chat`, that chat's board — a chat that has one already gets no second one
-    (chat.py opens a new chat for it); `from` = the chat the board was opened from."""
-    old = chat_scene(b.get("chat"))
-    if old is not None:
-        raise SceneError(f"this chat already has its board «{old['title']}» (one chat — one board)")
+    """A new board; with `chat`, one more board of that chat (its active one now); the chat's other boards stay as they are."""
     S.study["seq"] += 1
     sc, first = scenes.make_scene(f"s{S.study['seq']}", b, current_fen())
-    for key in ("puzzle", "chat", "from", "game"):
+    for key in ("puzzle", "chat", "game"):
         if b.get(key):
             sc[key] = b[key]
     S.study["scenes"].append(sc)
@@ -146,6 +174,8 @@ async def op_show(b: dict) -> dict:
     goto = sc["root"]
     if b.get("goto"):
         goto = scenes.find(sc, b["goto"])
+    if sc.get("chat"):
+        await set_chat_board(sc["chat"], sc["id"])
     await broadcast({"type": "scene", "scene": sc, "goto": goto["id"]})
     return {"ok": True, "scene": sc["id"], "showing": node_info(sc, goto)["path"], "tree": tree_text(sc)}
 

@@ -107,6 +107,7 @@ async def events(request: Request):
 
 
 async def view(request: Request):
+    prev = S.view.get("sceneId")
     S.view = await body(request)
     S.view["at"] = int(time.time() * 1000)
     if S.view.get("mode") in ("study", "puzzle", "play") and S.view["mode"] != S.settings.get("mode"):
@@ -114,6 +115,7 @@ async def view(request: Request):
         S.save_settings()
     if S.view.get("sceneId"):
         S.study["current"] = S.view["sceneId"]
+        await board.note_view(prev, S.view["sceneId"])
     return JSONResponse({"ok": True})
 
 
@@ -242,7 +244,7 @@ async def play(request: Request):
 # ---------------- chats ----------------
 @guarded
 async def chat_new(request: Request):
-    """A new chat; with `scene`, the chat of that board (one chat — one board): its own chat if it has one."""
+    """A new chat; with `scene`, the chat of that board: its own chat if it has one, else a new chat it joins."""
     b = await body(request)
     sc = board.find_scene(b.get("scene"))
     if b.get("scene") and sc is None:

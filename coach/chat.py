@@ -65,15 +65,17 @@ Name a mistake neutrally («ошибка», «неточность», «зево
 - Read `board_state` first whenever the user means "this position", «поясни», «почему», «а если».
 - Put positions, lines and arrows on the board with `show`, `add_line`, `annotate`, `goto`. The study board is a
   Lichess-style move tree: the first line is the main line, others are variations. One idea per comment.
-
-## One chat — one board
-This chat has its own board; the app shows it next to the chat. `show` creates it the first time; after that
-`add_line`, `annotate`, `goto`, `edit` always act on it, and positions that follow from it go in as variations.
-A position that does not follow from it (the next lesson, another opening) needs a new board: call `show` again with a
-`brief` — the board opens in a new chat, the user is moved there, and this chat and its board stay as they are.
 - Never state a line or an evaluation you have not checked with `analyse` (Stockfish). Explain plans and ideas
   in human terms; numbers only as support.
 - Ask questions in plain text (there is no question tool here).
+
+## This chat's boards
+This chat keeps its own boards, each with its own move tree; the user switches between them with tabs above the tree.
+`board_state` lists them. `add_line`, `annotate`, `goto`, `edit` act on the chat's active board (the one the user
+switched to last, or the one you made or picked last); pass `board` to work on another board of this chat.
+A position that follows from a board goes into its tree as a variation. A position that does not (the next lesson,
+another opening, a new example) goes on a new board: `show` adds one to this chat and makes it active; the older
+boards stay as they are. Never clear or reuse a board for an unrelated position.
 
 ## Live games
 The «Игра» mode plays real games on the user's Lichess account. Lichess forbids any outside help during a game,
@@ -165,41 +167,48 @@ def _schema(props: dict, required: list[str] | None = None) -> dict:
     return {"type": "object", "properties": props, "required": required or []}
 
 
+BOARD = {"type": "string", "description": "One of this chat's boards by id ('s12', see board_state); default: the active board. "
+                                          "A board picked here becomes the active one."}
+
+
 def make_tools(chat_id: str):
     async def call(name: str, args: dict, own: bool = False):
-        """own: the op acts on this chat's board (one chat — one board), never on another chat's."""
+        """own: the op acts on a board of this chat (`board`, else the active one), never on another chat's."""
         try:
             if own:
-                sc = board.chat_scene(chat_id)
+                args = dict(args)
+                picked = args.pop("board", None)
+                sc = board.chat_scene(chat_id, picked)
                 if sc is None:
-                    raise SceneError("this chat has no board yet: create it with show")
-                args = {**args, "scene": sc["id"]}
+                    raise SceneError("this chat has no board yet: create one with show")
+                args["scene"] = sc["id"]
+                if picked and not S.lock:
+                    await board.set_chat_board(chat_id, sc["id"])
             return _ok(await board.call_op(name, args))
         except (SceneError, ValueError) as e:
             return _err(str(e))
 
     @tool("board_state", "What the user sees now: mode (study/puzzle), board FEN and text diagram, the study tree (PGN with node ids "
           "[nX], user's own moves marked ·user) and the node they are on, or the puzzle with engine data and their tries; "
-          "and whether this chat's board is the one on screen.", _schema({}))
+          "and this chat's boards: which one is active and which is on screen.", _schema({}))
     async def board_state(args):
         try:
             out = await board.call_op("board_state", args)
         except SceneError as e:
             return _err(str(e))
         out.pop("recent_diagrams", None)  # other chats' boards are not this chat's business
-        sc = board.chat_scene(chat_id)
-        if sc is None:
-            out["this_chat_board"] = "none yet: show creates it"
-        elif (out.get("study") or {}).get("scene") == sc["id"]:
-            out["this_chat_board"] = {"scene": sc["id"], "on_screen": True}
-        else:  # the user went to another board or mode while this chat worked
-            out["this_chat_board"] = {"scene": sc["id"], "title": sc["title"], "on_screen": False, "tree": board.tree_text(sc)}
+        active = board.chat_scene(chat_id)
+        shown = (out.get("study") or {}).get("scene")
+        out["this_chat_boards"] = [{"board": s["id"], "title": s["title"], **({"active": True} if s is active else {}),
+                                    **({"on_screen": True} if s["id"] == shown else {})}
+                                   for s in board.chat_scenes(chat_id)] or "none yet: show creates the first one"
+        if active is not None and active["id"] != shown:  # the user went to another board or mode while this chat worked
+            out["active_board"] = {"board": active["id"], "title": active["title"], "tree": board.tree_text(active)}
         return _ok(out)
 
-    @tool("show", "Create this chat's board (study mode) with a position and lines. One chat — one board: if this chat has its board "
-          "already, the new board opens in a NEW chat (pass `brief` for it); this chat and its board stay as they are, and the user "
-          "is moved to the new pair. Lines become a Lichess-style tree: the first is the main line, later ones variations; "
-          "a line's 'at' starts it deeper in the tree.",
+    @tool("show", "Add a new board to this chat (study mode) with a position and lines; it becomes the active board and comes on screen. "
+          "The chat's other boards stay as they are. Use it for a position that does not follow from an existing board. "
+          "Lines become a Lichess-style tree: the first is the main line, later ones variations; a line's 'at' starts it deeper in the tree.",
           _schema({
               "title": {"type": "string"},
               "position": {"type": "string", "description": "'start', 'current', a FEN, or moves from the initial position."},
@@ -210,46 +219,32 @@ def make_tools(chat_id: str):
               "shapes": SHAPES,
               "orientation": {"type": "string", "enum": ["white", "black"]},
               "goto": AT,
-              "brief": {"type": "string", "description": "Only when this chat has its board already: what the new chat must know to "
-                        "continue — the topic, what the user has covered here, what to do next on the new board."},
           }, ["title"]))
     async def show(args):
-        parent = CHATS.chats.get(chat_id)
-        if board.chat_scene(chat_id) is None or parent is None:
-            return await call("show", {**{k: v for k, v in args.items() if k != "brief"}, "chat": chat_id})
-        # one chat — one board: a second position opens as a new board in a new chat; this pair stays as it is
-        new = await CHATS.create(parent.model, parent.effort, title=args.get("title"),
-                                 brief=f"This chat was opened from the chat «{parent.title}» for the board «{args.get('title') or ''}». "
-                                       f"Brief from that chat: {(args.get('brief') or '(none)').strip()}")
-        await CHATS.add_entry(new, {"kind": "note", "text": f"Доска открыта из чата «{parent.title}»"})
-        try:
-            res = await board.call_op("show", {**{k: v for k, v in args.items() if k != "brief"}, "chat": new.id, "from": chat_id})
-        except (SceneError, ValueError) as e:
-            await CHATS.delete(new.id)
-            return _err(str(e))
-        return _ok({**res, "new_chat": new.title,
-                    "note": "The board opened in a new chat and the user was moved there. End your reply here with one short line "
-                            "saying the new board is in the new chat; continue the topic there, not here."})
+        return await call("show", {**args, "chat": chat_id})
 
-    @tool("add_line", "Add moves to this chat's board from node `at` (default: start); existing moves are reused, new ones "
-          "become a variation. The board jumps to its first new move.",
-          _schema({"moves": MOVES, "at": AT, "title": {"type": "string"}, "comment": {"type": "string"}, "shapes": SHAPES}, ["moves"]))
+    @tool("add_line", "Add moves to a board of this chat (default: the active one) from node `at` (default: start); existing moves "
+          "are reused, new ones become a variation. The board jumps to its first new move.",
+          _schema({"moves": MOVES, "at": AT, "title": {"type": "string"}, "comment": {"type": "string"}, "shapes": SHAPES,
+                   "board": BOARD}, ["moves"]))
     async def add_line(args):
         return await call("add_line", args, own=True)
 
-    @tool("annotate", "Set comment / arrows / glyph (!, ?, !!, ??, !?, ?!) on a node of this chat's board (default: the one the user "
-          "is on) and show it. append=true adds instead of replacing. title renames the board.",
+    @tool("annotate", "Set comment / arrows / glyph (!, ?, !!, ??, !?, ?!) on a node of a board of this chat (default: the active "
+          "board, the node the user is on) and show it. append=true adds instead of replacing. title renames the board.",
           _schema({"at": AT, "comment": {"type": "string"}, "shapes": SHAPES, "glyph": {"type": "string"},
-                   "append": {"type": "boolean"}, "title": {"type": "string"}}))
+                   "append": {"type": "boolean"}, "title": {"type": "string"}, "board": BOARD}))
     async def annotate(args):
         return await call("annotate", args, own=True)
 
-    @tool("goto", "Move the user's board to a node of this chat's board.", _schema({"at": AT}))
+    @tool("goto", "Show the user a node of a board of this chat (default: the active board); with `board`, switches to that board.",
+          _schema({"at": AT, "board": BOARD}))
     async def goto(args):
         return await call("goto", args, own=True)
 
-    @tool("edit", "Change the tree: 'promote' makes the line through `at` the main line, 'delete' removes `at` and what follows.",
-          _schema({"at": AT, "action": {"type": "string", "enum": ["promote", "delete"]}}, ["action"]))
+    @tool("edit", "Change a board's tree (default: the active board): 'promote' makes the line through `at` the main line, "
+          "'delete' removes `at` and what follows.",
+          _schema({"at": AT, "action": {"type": "string", "enum": ["promote", "delete"]}, "board": BOARD}, ["action"]))
     async def edit(args):
         return await call("edit", args, own=True)
 
@@ -297,7 +292,6 @@ class Chat:
         self.created: float = meta.get("created") or time.time()
         self.updated: float = meta.get("updated") or self.created
         self.cost: float = meta.get("cost") or 0.0
-        self.brief: str | None = meta.get("brief")  # context for Claude, sent with the chat's first message
         self.entries: list[dict] = load_json(CHATS_DIR / f"{self.id}.json", [])
         # a reply cut off by an app restart: close what was left open
         cut = False
@@ -324,8 +318,7 @@ class Chat:
 
     def meta(self) -> dict:
         return {"id": self.id, "title": self.title, "model": self.model, "effort": self.effort, "session_id": self.session_id,
-                "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy,
-                **({"brief": self.brief} if self.brief else {})}
+                "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy}
 
     def save(self) -> None:
         save_json(CHATS_DIR / f"{self.id}.json", self.entries)
@@ -361,11 +354,9 @@ class ChatManager:
         await broadcast({"type": "chat_entry", "chat": chat.id, "entry": entry})
 
     # ---- API ----
-    async def create(self, model: str | None = None, effort: str | None = None, title: str | None = None,
-                     brief: str | None = None) -> Chat:
+    async def create(self, model: str | None = None, effort: str | None = None) -> Chat:
         cid = uuid.uuid4().hex[:10]
-        chat = Chat({"id": cid, "model": model or DEFAULT_MODEL, "effort": effort or DEFAULT_EFFORT,
-                     "title": (title or "")[:48], "brief": brief})
+        chat = Chat({"id": cid, "model": model or DEFAULT_MODEL, "effort": effort or DEFAULT_EFFORT})
         self.chats[cid] = chat
         self.save_meta()
         await self.emit_list()
@@ -499,10 +490,6 @@ class ChatManager:
                 chat.client = client
                 while True:
                     text = await chat.queue.get()
-                    if chat.brief:  # a chat opened from another one: Claude gets that chat's brief once
-                        text = f"[{chat.brief}]\n\n{text}"
-                        chat.brief = None
-                        self.save_meta()
                     chat.busy = True
                     await self.emit_list()
                     try:
