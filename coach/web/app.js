@@ -407,7 +407,8 @@ function renderBoard() {
 function boardOrientation() {
   if (mode === "study") { const o = scene()?.orientation || "white"; return study.flipped ? other(o) : o; }
   if (mode === "play") { const o = pgame()?.color || "white"; return play.flipped ? other(o) : o; }
-  return pz.cur ? (pz.flipped ? other(pz.cur.color) : pz.cur.color) : "white";
+  const p = lp.on ? lp.cur : pz.cur; // Lichess puzzles keep their own current puzzle
+  return p ? (pz.flipped ? other(p.color) : p.color) : "white";
 }
 
 // ---------------- reporting to the server (Claude reads it) ----------------
@@ -1248,6 +1249,7 @@ async function lpNext() {
   lp.loading = true;
   lp.cur = null;
   lp.st = null;
+  pz.flipped = false; // each puzzle starts from the solver's side, as with the user's own puzzles
   closePreviewSilently();
   renderPuzzlePanel();
   try {
@@ -1270,7 +1272,7 @@ function lpBoard() {
   if (!p || !st || st.error) return;
   const movable = !st.done && !st.wrong;
   setBoard({
-    fen: st.fen, orientation: pz.flipped ? other(p.color) : p.color, lastMove: st.last ? sq(st.last) : undefined, shapes: st.shapes || [],
+    fen: st.fen, orientation: boardOrientation(), lastMove: st.last ? sq(st.last) : undefined, shapes: st.shapes || [],
     movable: movable ? { color: p.color, dests: legalDests(st.fen), after: lpMove } : null,
   });
 }
