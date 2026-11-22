@@ -213,6 +213,8 @@ class Repertoire:
     # ---- what the window gets ----
     def public(self, trees: bool = True) -> dict:
         from .chat import CHATS
+        if trees:  # the window's first load: sections from the games, if there are none yet
+            self.ensure_seeded()
         order: dict[tuple, int] = {}
         for c in COLORS:
             for i, (n, _) in enumerate(scenes.walk(self.trees[c]["root"])):
