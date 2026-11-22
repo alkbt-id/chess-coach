@@ -294,6 +294,8 @@ def make_scene(sid: str, spec: dict, current_fen: str | None = None) -> tuple[di
     if orientation not in ("white", "black"):
         raise SceneError("orientation must be 'white' or 'black'")
     sc = new_scene(sid, spec.get("title") or "Позиция", board.fen(), orientation, spec.get("comment") or "", spec.get("shapes"))
+    if board.move_stack:  # a position given as moves keeps them: the moves before the board stay clickable in text
+        sc["history"] = {"start": board.root().fen(), "moves": [m.uci() for m in board.move_stack]}
     first = None
     for i, raw in enumerate(spec.get("lines") or []):
         ln: dict = {"moves": raw} if isinstance(raw, (str, list)) else raw

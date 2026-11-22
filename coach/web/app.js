@@ -549,7 +549,7 @@ document.addEventListener("click", (e) => {
   if (seq.dataset.line) { openPreview(LINES.get(seq.dataset.line), i, "Вариант"); return; }
   const line = resolveMoves($$(".mvl", seq).map((x) => x.textContent));
   if (line?.scene) setScene(line.scene); // the line is about another board of this chat: that board comes on screen
-  if (line?.nodes && mode === "study" && i < line.nodes.length) {
+  if (line?.nodes?.[i] && mode === "study") {
     closePreviewSilently();
     study.node = line.nodes[i].id;
     renderStudy();
@@ -559,6 +559,10 @@ document.addEventListener("click", (e) => {
     m.classList.add("miss");
     m.title = "Этот ход нельзя сыграть ни в одной позиции досок этого чата";
     setTimeout(() => m.classList.remove("miss"), 1500);
+    return;
+  }
+  if (line.hist) { // a move of the game before the board: the game up to it, to step through
+    openPreview({ start: line.hist.start, plies: [...line.hist.before, ...line.plies] }, line.hist.before.length + i, "Партия до этой доски");
     return;
   }
   openPreview(line, Math.min(i, line.plies.length - 1), line.threat ? `Угроза: если бы ходили ${turnOf(line.start) === "white" ? "белые" : "чёрные"}` : "Вариант из текста");
@@ -581,6 +585,8 @@ function candidateFens() {
     if (sc) {
       [sc.root, ...pathTo(sc, study.node)].reverse().forEach((n) => add(n.fen));
       for (const { n } of tindex(sc).values()) add(n.fen);
+      const hist = histOf(sc);
+      if (hist) [hist.start, ...hist.plies.map((p) => p.fen)].forEach(add);
     }
   } else if (pz.cur) {
     add(pz.cur.fen);
@@ -642,10 +648,50 @@ function treeMatch(toks, other = null) {
 }
 
 // in order: the tree on screen, the tree of another board of this chat, the rules from a position on screen,
-// the rules from a position of another board of this chat
+// the rules from a position of another board of this chat (the moves that led to a board's start count as its tree)
 function resolveMoves(rawToks) {
   const toks = rawToks.map(parseTok);
-  return treeMatch(toks) || otherBoard(toks, true) || byRules(toks) || otherBoard(toks, false);
+  return treeMatch(toks) || (mode === "study" && histMatch(toks, scene())) || otherBoard(toks, true) || byRules(toks) || otherBoard(toks, false);
+}
+
+// ---------------- the moves that led to a board's start ----------------
+// "after 5...Bg7 the knight d4 hangs" about a board that starts after 5...Bg7: the server keeps those moves with the
+// board (sc.history: from the moves Claude gave, or from the user's game that reaches the position, coach/history.py)
+const histCache = new WeakMap();
+function histOf(sc) {
+  if (!sc?.history?.moves?.length) return null;
+  let h = histCache.get(sc);
+  if (!h) { h = playLine(sc.history.start, sc.history.moves); histCache.set(sc, h); }
+  return h.plies.length === sc.history.moves.length ? h : null;
+}
+
+// moves of the game before the board, maybe going on into the tree or by the rules:
+// {start, plies, nodes (nodes[k]: the tree node of toks[k], the start for the move into it), hist: {start, before}}
+function histMatch(toks, sc) {
+  const hist = histOf(sc);
+  if (!hist) return null;
+  const hp = hist.plies;
+  for (let h = 0; h < hp.length; h++) {
+    if (normSan(hp[h].san) !== normSan(toks[0].san) || !numFits(hp[h], toks[0])) continue;
+    const plies = [];
+    const nodes = [];
+    let k = 0;
+    while (k < toks.length && h + k < hp.length && normSan(hp[h + k].san) === normSan(toks[k].san)) plies.push(hp[h + k++]);
+    let fen = plies.at(-1).fen;
+    if (h + k === hp.length) { // reached the board's start: on into its tree
+      nodes[k - 1] = sc.root;
+      for (let cur = sc.root, next; k < toks.length && (next = cur.children.find((c) => normSan(c.san) === normSan(toks[k].san))); k++) {
+        nodes[k] = next;
+        plies.push(toPly(next));
+        cur = next;
+        fen = next.fen;
+      }
+    }
+    const rest = k < toks.length ? playSan(fen, toks.slice(k)) : [];
+    if (!rest) continue;
+    return { start: h ? hp[h - 1].fen : hist.start, plies: [...plies, ...rest], nodes, hist: { start: hist.start, before: hp.slice(0, h) } };
+  }
+  return null;
 }
 
 // a chat has several boards: a line from an earlier message may belong to another of them (`scene` says which)
@@ -655,12 +701,15 @@ function otherBoard(toks, treeOnly) {
   for (const sc of boardsOf(ch.cur).reverse()) {
     if (sc.id === study.id) continue;
     if (treeOnly) {
-      const inTree = treeMatch(toks, sc);
+      const inTree = treeMatch(toks, sc) || histMatch(toks, sc);
       if (inTree) return { ...inTree, scene: sc.id };
     } else if (fits) { // an unnumbered move fits too many positions of a board not on screen
-      for (const { n } of tindex(sc).values()) {
-        const plies = fits(n.fen) && playSan(n.fen, toks);
-        if (plies?.length) return { start: n.fen, plies, scene: sc.id };
+      const hist = histOf(sc);
+      const fens = [...tindex(sc).values()].map(({ n }) => n.fen);
+      if (hist) fens.push(hist.start, ...hist.plies.map((p) => p.fen));
+      for (const fen of fens) {
+        const plies = fits(fen) && playSan(fen, toks);
+        if (plies?.length) return { start: fen, plies, scene: sc.id };
       }
     }
   }
@@ -798,7 +847,7 @@ function seqLine(seq) {
   if (!tree) return null;
   if (seq._res && seq._res.tree === tree) return seq._res.line;
   const toks = $$(".mvl", seq).map((x) => parseTok(x.textContent));
-  const line = treeMatch(toks);
+  const line = treeMatch(toks) || (mode === "study" ? histMatch(toks, tree) : null);
   seq._res = { tree, line: line?.nodes ? line : null };
   return seq._res.line;
 }
@@ -853,8 +902,9 @@ function pathTo(sc, id) {
 function studyBoard() {
   const node = curNode();
   const fen = node ? node.fen : START_FEN;
+  const into = node && node === scene()?.root ? histOf(scene())?.plies.at(-1) : null; // the game's move into the board's start
   setBoard({
-    fen, orientation: boardOrientation(), lastMove: node?.uci ? sq(node.uci) : undefined,
+    fen, orientation: boardOrientation(), lastMove: node?.uci ? sq(node.uci) : into ? sq(into.uci) : undefined,
     shapes: [...(node?.shapes || []), ...glyphShape(node), ...engineArrow(fen)],
     movable: { color: turnOf(fen), dests: legalDests(fen), after: onStudyMove },
   });

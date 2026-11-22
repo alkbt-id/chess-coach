@@ -14,7 +14,7 @@ from pathlib import Path
 import anyio
 import chess
 
-from . import explain, scenes
+from . import explain, history, scenes
 from .config import DATA, PUZZLES
 from .engine import ENGINE
 from .scenes import SceneError
@@ -159,11 +159,23 @@ def current_fen() -> str | None:
     return S.view.get("fen")
 
 
+def backfill_history() -> None:
+    """Boards made before they kept the moves that led to them: look those up in the stored games (at server start)."""
+    todo = [sc for sc in S.study["scenes"] if "history" not in sc]
+    if not todo:
+        return
+    for sc in todo:
+        sc["history"] = history.find(sc["root"]["fen"])
+    S.save_study()
+
+
 # ---------------- operations ----------------
 async def op_show(b: dict) -> dict:
     """A new board; with `chat`, one more board of that chat (its active one now); the chat's other boards stay as they are."""
     S.study["seq"] += 1
     sc, first = scenes.make_scene(f"s{S.study['seq']}", b, current_fen())
+    if "history" not in sc:
+        sc["history"] = await asyncio.to_thread(history.find, sc["root"]["fen"])
     for key in ("puzzle", "chat", "game"):
         if b.get(key):
             sc[key] = b[key]

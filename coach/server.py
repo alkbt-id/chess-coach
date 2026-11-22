@@ -498,6 +498,8 @@ async def lpuzzle_explain(request: Request):
 async def lifespan(_: Starlette):
     with contextlib.suppress(Exception):  # an old review board without its players only lacks the names
         review.backfill_players()
+    with contextlib.suppress(Exception):  # an old board without its moves before only keeps them unclickable
+        board.backfill_history()
     await live.L.start()
     yield
     await live.L.close()

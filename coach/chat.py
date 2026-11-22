@@ -212,7 +212,9 @@ def make_tools(chat_id: str):
           "Lines become a Lichess-style tree: the first is the main line, later ones variations; a line's 'at' starts it deeper in the tree.",
           _schema({
               "title": {"type": "string"},
-              "position": {"type": "string", "description": "'start', 'current', a FEN, or moves from the initial position."},
+              "position": {"type": "string", "description": "'start', 'current', a FEN, or moves from the initial position. "
+                           "For a position from a game give the moves: the board keeps them, so moves before it "
+                           "(«после 5...Bg7») stay clickable in text. A FEN from the user's games finds its moves by itself."},
               "lines": {"type": "array", "items": {"type": "object", "properties": {
                   "moves": MOVES, "title": {"type": "string", "description": "short label shown before the line"},
                   "comment": {"type": "string"}, "shapes": SHAPES, "at": AT}}},
