@@ -188,6 +188,18 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .tview .line::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--muted); opacity: .45; }
 .tview .line:last-child::before { bottom: auto; height: calc(.85em + 1px); }
 .tview .line::after { content: ""; position: absolute; left: 0; top: calc(.85em + 1px); width: 11px; border-top: 1.5px solid var(--muted); opacity: .45; }
+/* fold button on the connector's corner: − open, + folded; a folded branch keeps only its first move */
+.tview .line > .tg { position: absolute; z-index: 1; left: -6px; top: calc(.85em + 1px - 6.5px); width: 13px; height: 13px; padding: 0; display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--muted) 60%, transparent); border-radius: 50%; background: var(--surface-2); color: var(--muted); font: 600 10px/1 var(--font-mono); cursor: pointer; }
+.tview .line > .tg::before { content: "−"; }
+.tview .line.folded > .tg::before { content: "+"; }
+.tview .line > .tg:hover { color: var(--ink); border-color: var(--ink); }
+.tview .line.folded > .body, .tview .line:not(.folded) > .more { display: none; }
+.tview .line > .more { border: 0; background: none; padding: 0 4px; border-radius: 3px; color: var(--muted); font: 12px var(--font-body); cursor: pointer; }
+.tview .line > .more:hover { background: var(--accent-soft); color: var(--ink); }
+@media (pointer: coarse) {
+  .tview .line > .tg { left: -10px; top: calc(.85em + 1px - 10.5px); width: 21px; height: 21px; font-size: 13px; }
+}
 .tview .line .vm, .tview .paren .vm { cursor: pointer; font-weight: 600; border-radius: 3px; padding: 0 2px; }
 .tview .vm:hover { background: var(--accent-soft); }
 .tview .vm.active { background: var(--accent-bg); color: var(--accent-ink); }
@@ -198,8 +210,9 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .tview .inter > .cmt { line-height: 1.5; }
 .tview .line .cmt, .tview .paren .cmt { color: var(--muted); font-size: 12.5px; }
 .cmt.active-c { background: var(--accent-soft); border-radius: 4px; }
-.lbl { font: 600 10px var(--font-body); letter-spacing: .04em; text-transform: uppercase; background: var(--warn-soft); color: var(--warn); border-radius: 4px; padding: 1px 5px; margin-right: 3px; }
-.tm.active .lbl { background: rgba(255,255,255,.25); color: inherit; }
+/* Claude's title of a line ("лучший ответ"), quiet, after the move */
+.lbl { font: 400 11px var(--font-body); color: var(--muted); opacity: .8; background: var(--surface-3); border-radius: 4px; padding: 0 5px; margin-left: 4px; white-space: nowrap; }
+.tm.active .lbl { background: rgba(255,255,255,.18); color: inherit; opacity: .85; }
 .user { color: var(--user-move); }
 .tm.active.user { color: var(--accent-ink); }
 .g { font-weight: 700; margin-left: 1px; }

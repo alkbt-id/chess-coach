@@ -1038,15 +1038,55 @@ const glyphHtml = (n) => (n.glyph ? `<span class="g ${GLYPH_CLASS[n.glyph] || ""
 const labelHtml = (n) => (n.label ? `<span class="lbl">${esc(n.label)}</span>` : "");
 function idxCell(num) { return `<span class="ix">${esc(num.replace(/[.…]$/, ""))}</span>`; }
 function treeMove(n, cur) {
-  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${labelHtml(n)}${esc(n.san)}${glyphHtml(n)}</span>`;
+  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
 }
 function inlineMove(n, cur, force) {
   const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
-  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${labelHtml(n)}${esc(n.san)}${glyphHtml(n)}</span> `;
+  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)} `;
 }
 function commentHtml(n, cur) {
   return n.comment ? `<span class="cmt rich${n.id === cur ? " active-c" : ""}">${md(n.comment)}</span>` : "";
 }
+
+// Folded branches, per tree (a board by its id, other trees by their start position), kept across
+// restarts. A folded branch shows only its first move; stepping onto a move inside it opens it again.
+const FOLDED = (() => { try { return JSON.parse(localStorage.getItem("tree.folded") || "{}"); } catch { return {}; } })();
+const foldShown = new Map(); // tree → the move that was current at its last render
+let fold = null; // the tree being rendered: {key, set, moved, dirty}
+const foldSet = (key) => new Set(FOLDED[key] || []);
+function saveFold(key, set) {
+  if (set.size) FOLDED[key] = [...set]; else delete FOLDED[key];
+  const keys = Object.keys(FOLDED);
+  if (keys.length > 300) delete FOLDED[keys[0]];
+  try { localStorage.setItem("tree.folded", JSON.stringify(FOLDED)); } catch {}
+}
+const hasNode = (n, id) => n.children.some((c) => c.id === id || hasNode(c, id));
+const countNodes = (n) => n.children.reduce((k, c) => k + 1 + countNodes(c), 0);
+function plural(k, one, few, many) {
+  const a = k % 10, b = k % 100;
+  return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
+}
+function setFolded(line, set, on) {
+  line.classList.toggle("folded", on);
+  line.querySelector(":scope > .tg")?.setAttribute("aria-expanded", String(!on));
+  if (on) set.add(line.dataset.fold); else set.delete(line.dataset.fold);
+}
+// fold or open every branch of a tree view (right-click menu)
+function foldAll(tv, on) {
+  if (!tv) return;
+  const set = foldSet(tv.dataset.tree);
+  for (const l of $$(".line[data-fold]", tv)) setFolded(l, set, on);
+  saveFold(tv.dataset.tree, set);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".tview .tg, .tview .more");
+  if (!b) return;
+  const line = b.closest(".line"), key = b.closest(".tview").dataset.tree;
+  const set = foldSet(key);
+  setFolded(line, set, !line.classList.contains("folded"));
+  saveFold(key, set);
+});
+
 // A side line goes in parentheses (Lichess "renderInlined") only when it is short and plain: the only
 // alternative, no forks, no comments, no title. Any other fork ends the row, and every branch — the
 // main continuation first — gets its own indented row with a tree connector (Lichess "lines").
@@ -1056,11 +1096,24 @@ function plainLine(n, max = 8) {
   }
   return true;
 }
-function linesHtml(nodes, cur) {
-  return `<div class="lines">${nodes.map((n) => `<div class="line">${seqHtml(n, cur)}</div>`).join("")}</div>`;
+function lineHtml(n, cur) {
+  const head = inlineMove(n, cur, true);
+  const body = seqHtml(n, cur, true);
+  if (!body.trim()) return `<div class="line">${head}</div>`;
+  let folded = !!fold?.set.has(n.id);
+  if (folded && fold.moved && hasNode(n, cur)) { fold.set.delete(n.id); fold.dirty = true; folded = false; }
+  const k = countNodes(n);
+  const more = k ? `ещё ${k} ${plural(k, "ход", "хода", "ходов")}` : "комментарий";
+  return `<div class="line${folded ? " folded" : ""}" data-fold="${n.id}">` +
+    `<button type="button" class="tg" aria-expanded="${!folded}" title="Свернуть или развернуть вариант"></button>` +
+    `${head}<button type="button" class="more" title="Развернуть вариант">… ${more}</button><span class="body">${body}</span></div>`;
 }
-function seqHtml(first, cur) {
-  let h = inlineMove(first, cur, true) + commentHtml(first, cur);
+function linesHtml(nodes, cur) {
+  return `<div class="lines">${nodes.map((n) => lineHtml(n, cur)).join("")}</div>`;
+}
+// the moves from `first` on; with `rest`, everything after the first move (its comment included)
+function seqHtml(first, cur, rest = false) {
+  let h = (rest ? "" : inlineMove(first, cur, true)) + commentHtml(first, cur);
   let n = first;
   let force = !!first.comment;
   while (n.children.length) {
@@ -1074,9 +1127,10 @@ function seqHtml(first, cur) {
   }
   return h;
 }
-function treeHtml(root, cur) {
+function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
-  let h = '<div class="tview">';
+  fold = { key, set: foldSet(key), moved: foldShown.get(key) !== cur, dirty: false };
+  let h = `<div class="tview" data-tree="${esc(key)}">`;
   let node = root;
   let needIdx = true;
   while (node.children.length) {
@@ -1093,6 +1147,9 @@ function treeHtml(root, cur) {
     }
     node = main;
   }
+  foldShown.set(key, cur);
+  if (fold.dirty) saveFold(key, fold.set);
+  fold = null;
   return `${h}</div>`;
 }
 
@@ -1191,13 +1248,13 @@ function studyPanelHtml() {
     ${reviewHtml(sc)}
     ${cevalHtml()}
     ${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
-    ${treeHtml(sc.root, study.node) || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}
+    ${treeHtml(sc.root, study.node, sc.id) || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}
     ${curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) ? `<button type="button" class="btn small" id="ask-line">Спросить Claude про этот вариант</button>` : ""}
     <div class="legend">
       <div><span class="lg-cur">ход</span> — позиция, что сейчас на доске; нажми на любой ход, чтобы перейти к нему</div>
       <div><span class="user">ход</span> — твои ходы, <b>ход</b> — ходы Claude; текст под ходом — комментарий Claude</div>
       <div><span class="g g-good">!</span> хороший ход · <span class="g g-mist">?</span> ошибка · <span class="g g-blun">??</span> грубая ошибка · <span class="g g-int">!?</span> интересно</div>
-      <div>Отступ — побочный вариант. <span class="kbd">←</span><span class="kbd">→</span> по ходам, <span class="kbd">⇧↑</span><span class="kbd">⇧↓</span> между вариантами, правый клик по ходу — меню</div>
+      <div>Отступ — побочный вариант: <b>−</b> слева от него сворачивает, <b>+</b> разворачивает. <span class="kbd">←</span><span class="kbd">→</span> по ходам, <span class="kbd">⇧↑</span><span class="kbd">⇧↓</span> между вариантами, правый клик по ходу — меню</div>
     </div>`;
 }
 
@@ -1337,6 +1394,8 @@ $("#panel").addEventListener("contextmenu", (e) => {
   ctx.innerHTML = `<button type="button" data-act="promote">Сделать главной линией</button>
     <button type="button" data-act="ask">Спросить Claude про эту позицию</button>
     <button type="button" data-act="fen">Скопировать FEN</button>
+    ${$(".tview .line[data-fold]", $("#panel")) ? `<button type="button" data-act="fold">Свернуть все варианты</button>
+    <button type="button" data-act="unfold">Развернуть все варианты</button>` : ""}
     <button type="button" data-act="delete" class="danger">Удалить с этого хода</button>`;
   ctx.dataset.id = t.dataset.id;
   ctx.hidden = false;
@@ -1349,6 +1408,7 @@ $("#ctx").addEventListener("click", async (e) => {
   const ctx = $("#ctx");
   const id = ctx.dataset.id;
   ctx.hidden = true;
+  if (b.dataset.act === "fold" || b.dataset.act === "unfold") { foldAll($("#panel .tview"), b.dataset.act === "fold"); return; }
   const sc = scene();
   const entry = sc && tindex(sc).get(id);
   if (!entry) return;
