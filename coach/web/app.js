@@ -1723,7 +1723,9 @@ const pz = { list: [], byId: {}, prog: {}, cur: null, st: null, session: { done:
 const lp = { on: false, ready: false, loading: false, req: 0, status: null, ru: {}, cur: null, meta: null, st: null, difficulty: "normal", angle: "weak", weak: null, showWeak: false };
 const DIFF_RU = { easiest: "Самые лёгкие", easier: "Легче", normal: "Мой уровень", harder: "Сложнее", hardest: "Самые сложные" };
 const themeRu = (t) => lp.ru[t] || t;
-const lpSave = () => http.send("PUT", "/api/settings", { lpuzzle: { on: lp.on, difficulty: lp.difficulty, angle: lp.angle } }).catch(() => {});
+const lpSave = () => http.send("PUT", "/api/settings", { lpuzzle: { on: lp.on, difficulty: lp.difficulty, angle: lp.angle, custom: lp.custom || null } }).catch(() => {});
+// an opening of the repertoire as the Lichess theme (lp.custom = {angle, name, section}: «Задачи Lichess» of a section)
+const lpOpening = () => (lp.custom && lp.custom.angle === lp.angle ? lp.custom : null);
 
 async function lpEnsure() {
   if (lp.ready) return;
@@ -1763,7 +1765,7 @@ async function lpNext() {
     const r = await post("/api/lpuzzle/next", { difficulty: lp.difficulty, angle: lp.angle });
     if (my !== lp.req) return;
     lp.cur = r.puzzle;
-    lp.meta = { angle: r.angle, angleName: r.angleName, weak: r.weak, why: r.why, rated: r.rated };
+    lp.meta = { angle: r.angle, angleName: lp.custom?.angle === r.angle ? `Дебют: ${lp.custom.name}` : r.angleName, weak: r.weak, why: r.why, rated: r.rated };
     lp.st = { step: 0, fen: r.puzzle.fen, last: r.puzzle.last, failed: false, done: false, submitted: false, why: null, wrong: null, result: null, shapes: [] };
     if (r.glicko && lp.status) lp.status.glicko = r.glicko;
   } catch (err) {
@@ -1904,7 +1906,7 @@ function lpPanelHtml() {
     h += `<div class="ladder"><div class="lr"><b>${g?.rating ? Math.round(g.rating) : "…"}</b><span>рейтинг задач на Lichess · ${esc(acc.user || "")}</span></div>
       ${lp.status.rated ? "" : `<div class="lr-meta">у входа нет права записи задач — подключи Lichess заново</div>`}</div>`;
   }
-  const angles = [["weak", "Под мои слабости"], ["mix", "Смесь"], ...(lp.weak || []).map((w) => [w.theme, w.name])];
+  const angles = [["weak", "Под мои слабости"], ["mix", "Смесь"], ...(lp.custom ? [[lp.custom.angle, `Дебют: ${lp.custom.name}`]] : []), ...(lp.weak || []).map((w) => [w.theme, w.name])];
   h += `<div class="lp-opts">
     <select id="lp-angle" title="Тема задач">${angles.filter((a, i, arr) => arr.findIndex((x) => x[0] === a[0]) === i).map(([v, t]) => `<option value="${v}"${v === lp.angle ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>
     <select id="lp-diff" title="Сложность относительно твоего рейтинга">${["easier", "normal", "harder"].map((v) => `<option value="${v}"${v === lp.difficulty ? " selected" : ""}>${DIFF_RU[v]}</option>`).join("")}</select>
@@ -2069,6 +2071,7 @@ function ladderHtml() {
 }
 
 function match(p, f = pz.filt) {
+  if (pz.only && !pz.only.ids.has(p.id)) return false; // the puzzles of a repertoire section (REPERTOIRE)
   return (f.kind === "all" || p.kind === f.kind) && (f.phase === "all" || p.phase === f.phase) && (f.color === "all" || p.color === f.color);
 }
 
@@ -2246,6 +2249,12 @@ function renderPuzzlePanel() {
       <button type="button" class="chip" data-pmode="ladder" aria-pressed="${ladder.on && !lp.on}" title="Задачи под твой рейтинг: решил — рейтинг растёт и задачи сложнее">Рейтинг</button>
       <button type="button" class="chip" data-pmode="lichess" aria-pressed="${lp.on}" title="Задачи с Lichess в твой рейтинг на Lichess, подбор под твои слабости">Lichess</button>
     </div>`;
+  const op = lp.on ? lpOpening() : null;
+  if (op || (!lp.on && pz.only)) { // puzzles of a repertoire section: say so, with the way back
+    const n = op ? "" : `: ${pz.list.filter((x) => match(x, { kind: "all", phase: "all", color: "all" })).length}`;
+    html += `<div class="rep-trial"><div>${op ? `Задачи Lichess в дебюте «${esc(op.name)}»` : `Мои задачи из партий раздела «${esc(pz.only.name)}»${n}`}</div>
+      <div class="actions">${op ? "" : `<button type="button" class="link-btn" id="puz-all">все мои задачи</button>`}<button type="button" class="link-btn" id="puz-rep">← в репертуар</button></div></div>`;
+  }
   if (lp.on) { panel.innerHTML = html + lpPanelHtml(); return; }
   html += `<div class="stats" id="stats"></div><div class="filters" id="filters"></div><hr class="sep">`;
   if (!p) {
@@ -3413,6 +3422,33 @@ function repPanelHtml() {
   return s ? repSectionHtml(s) : repTocHtml();
 }
 
+// «Задачи»: the user's puzzles from the section's games and Lichess's puzzles of its opening, solved in «Задачи»
+function repPuzzleButtons(s) {
+  return `<div class="rep-drill"><span class="bt-label">Задачи:</span>
+    ${s.puzzles ? `<button type="button" class="btn small" id="puz-own" title="Позиции из твоих партий этого раздела, где ты ошибся или не наказал ошибку">Мои из этих партий · ${s.puzzles}</button>` : ""}
+    <button type="button" class="btn small" id="puz-lichess" title="Задачи Lichess из партий в этом дебюте, в твой рейтинг на Lichess">Lichess в этом дебюте</button></div>`;
+}
+
+async function repOwnPuzzles(s) {
+  const r = await post("/api/rep/puzzles", { section: s.id });
+  pz.only = { ids: new Set(r.ids), name: s.name, section: s.id };
+  lp.on = false;
+  lpSave();
+  setMode("puzzle");
+  if (!pz.cur || !match(pz.cur) || pz.st?.result) nextPuzzle(); else renderPuzzlePanel();
+}
+
+async function repLichessPuzzles(s) {
+  setStatus("Ищу задачи Lichess в этом дебюте…");
+  const r = await post("/api/rep/angle", { section: s.id });
+  setStatus("");
+  await lpEnsure();
+  lp.custom = { angle: r.angle, name: s.name, section: s.id };
+  Object.assign(lp, { on: true, angle: r.angle, cur: null, st: null });
+  lpSave();
+  setMode("puzzle");
+}
+
 // «Сыграть с движком» and the opponent's strength (kept in this window)
 function repGameButton() {
   const elo = repElo();
@@ -3488,6 +3524,7 @@ function repSectionHtml(s) {
     <div class="rep-chips"><span class="bt-label">Уроки:</span>${lessonChips}<button type="button" class="rchip add" id="rep-lesson-new">＋ Новый урок</button></div>
     ${repDrillButton({ section: s.id }, "drill-sec")}
     ${repGameButton()}
+    ${repPuzzleButtons(s)}
     ${repGamesHtml(s)}
     <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."} Увидеть его — попроси в чате «покажи конспект».</p>`;
   const boards = inLesson ? boardsOf(ch.cur) : [];
@@ -4275,7 +4312,7 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del], #game-start, #game-stop, #game-stop2, #game-back, #game-resign, #game-review, #game-again");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del], #game-start, #game-stop, #game-stop2, #game-back, #game-resign, #game-review, #game-again, #puz-own, #puz-lichess");
   if (!t) return;
   if (t.dataset.sec && e.target.closest(".mvl")) e.stopPropagation(); // the row opens its section; its moves only show on hover
   const s = repSec();
@@ -4285,6 +4322,8 @@ $("#panel").addEventListener("click", async (e) => {
     else if (t.dataset.lesson) openChat(t.dataset.lesson);
     else if (t.dataset.lessonDel) await repDeleteLesson(t.dataset.lessonDel);
     else if (t.id === "game-start" && s) gameStart(s.id);
+    else if (t.id === "puz-own" && s) await repOwnPuzzles(s);
+    else if (t.id === "puz-lichess" && s) await repLichessPuzzles(s);
     else if (t.id === "game-again" && rep.game) gameStart(rep.game.section);
     else if (t.id === "game-stop" || t.id === "game-stop2") repGameStop();
     else if (t.id === "game-back") gameTakeback();
@@ -4360,6 +4399,15 @@ $("#panel").addEventListener("submit", async (e) => {
 });
 $("#panel").addEventListener("keydown", (e) => {
   if (e.key === "Escape" && rep.on && rep.rename) { rep.rename = false; renderStudyPanel(); }
+});
+// «Задачи» showing a section's puzzles: back to all of them, or back to the repertoire
+$("#panel").addEventListener("click", (e) => {
+  const t = e.target.closest("#puz-all, #puz-rep");
+  if (!t || mode !== "puzzle") return;
+  if (t.id === "puz-all") {
+    pz.only = null;
+    if (!pz.cur || pz.st?.result) nextPuzzle(); else renderPuzzlePanel();
+  } else setMode("rep");
 });
 $("#panel").addEventListener("change", (e) => {
   if (e.target.id !== "game-elo") return;

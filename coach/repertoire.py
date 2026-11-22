@@ -26,6 +26,10 @@
 - A training game against the engine (app.js REPERTOIRE): the window plays the opponent's moves of the tree (or of
   the line Claude chose with repertoire_play), then asks /api/rep/engine for Stockfish's move at a limited strength
   (UCI_Elo) — a Stockfish process of its own, so the analysis engine keeps full strength.
+- Puzzles of a section: the user's own (puzzles.json, from the section's games, the section's colour) and Lichess's
+  puzzles of that opening — the Lichess opening key (Queens_Pawn_Game_London_System) is the section's opening name,
+  tried from the most specific to the family until Lichess has puzzles for it, and kept with the section ("angle").
+  Both are solved in «Задачи» (app.js: pz.only, lp.custom).
 - While a live Lichess game is on (S.lock) the repertoire is closed: it is opening preparation.
 """
 
@@ -35,11 +39,13 @@ import json
 import re
 import threading
 import time
+import unicodedata
 from collections import Counter
 
 import anyio
 import chess
 import chess.engine
+import httpx
 from claude_agent_sdk import tool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -48,6 +54,7 @@ from starlette.routing import Route
 from . import board, openings, review, scenes
 from .board import DATA, S, broadcast, load_json, save_json
 from .engine import STOCKFISH
+from .lichess import API, HEADERS
 from .scenes import SceneError
 
 FILE = DATA / "repertoire.json"
@@ -61,6 +68,12 @@ IDLE = 15 * 60
 DRILL_STEPS = [10 * 60, 86400, 3 * 86400, 7 * 86400, 16 * 86400, 35 * 86400, 80 * 86400]  # seconds until a card is due again
 # families too wide to be one opening: their variation is the section («Queen's Pawn Game: Chigorin Variation»)
 GENERIC = {"King's Pawn Game", "Queen's Pawn Game", "Indian Defense", "King's Knight Opening", "King's Pawn Opening", "Zukertort Opening"}
+
+
+def lichess_key(name: str) -> str:
+    """«Queen's Pawn Game: London System» → Queens_Pawn_Game_London_System (Lichess's opening keys, accents dropped)."""
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().replace("'", "")
+    return re.sub(r"[^A-Za-z0-9-]+", "_", plain).strip("_")
 
 
 def theme(name: str | None) -> str | None:
@@ -234,6 +247,7 @@ class Repertoire:
     def stats(self, sec: dict, recent: int = 8) -> dict:
         gl = self.section_games(sec)
         return {"games": len(gl), "score": round(100 * sum(g["result"] for g in gl) / len(gl)) if gl else None,
+                "puzzles": len(self.own_puzzles(sec, gl)),
                 "recent": [{k: g[k] for k in ("id", "date", "outcome", "opp", "oppRating", "url")} for g in gl[:recent]]}
 
     # ---- what the window gets ----
@@ -335,6 +349,40 @@ class Repertoire:
         top = {k: sorted(v.values(), key=lambda x: -x["games"])[:6] for k, v in groups.items()}
         counts = Counter("habit" if r["check"]["kind"] == "user" and not r["check"].get("learned") else r["check"]["kind"] for r in rows)
         return {"section": sec["id"], "games": len(rows), "counts": dict(counts), **top, "recent": rows[:recent]}
+
+    # ---- puzzles of a section ----
+    def own_puzzles(self, sec: dict, gl: list[dict] | None = None) -> list[str]:
+        """The user's puzzles (puzzles.json) from the section's games, on the section's side."""
+        ids = {g["id"] for g in (gl if gl is not None else self.section_games(sec))}
+        return [p["id"] for p in S.puzzles.values() if p.get("game") in ids and p.get("color") == sec["color"]]
+
+    def angle_candidates(self, sec: dict) -> list[str]:
+        """Lichess opening keys for the section, the most specific first."""
+        path = scenes.path_of(self.trees[sec["color"]], sec["node"])
+        names = []
+        deep = openings.name_along([n["uci"] for n in path])
+        if deep:
+            names += [deep, deep.split(",")[0], openings.family(deep)]
+        if sec.get("theme"):
+            names += [sec["theme"], openings.family(sec["theme"])]
+        keys: list[str] = []
+        for n in names:
+            k = lichess_key(n)
+            if k and k not in keys:
+                keys.append(k)
+        return keys
+
+    async def lichess_angle(self, sec: dict) -> str:
+        if sec.get("angle"):
+            return sec["angle"]
+        async with httpx.AsyncClient(timeout=20, headers=HEADERS) as c:
+            for key in self.angle_candidates(sec):
+                r = await c.get(f"{API}/api/puzzle/batch/{key}", params={"nb": 1})
+                if r.status_code == 200 and r.json().get("puzzles"):
+                    sec["angle"] = key
+                    self.save()
+                    return key
+        raise SceneError("на Lichess нет задач для этого дебюта")
 
     # ---- the drill ----
     def drill_answer(self, key: str, ok: bool) -> dict:
@@ -622,6 +670,7 @@ def tools(chat_id: str) -> list:
                 "games": REP.stats(sec, recent=12),
                 "user_moves_in_games": _first_moves(gl, node, tree),
                 "drill": REP.drill_summary(sec),
+                "own_puzzles": len(REP.own_puzzles(sec)),
                 "games_vs_tree": _games_vs_tree(REP.games_report(sec)),
             }
         return out
@@ -864,6 +913,21 @@ async def http_games(b: dict):
 
 
 @route
+async def http_puzzles(b: dict):
+    sec = REP.section(b.get("section"))
+    return {"ids": REP.own_puzzles(sec)}
+
+
+@route
+async def http_angle(b: dict):
+    sec = REP.section(b.get("section"))
+    try:
+        return {"angle": await REP.lichess_angle(sec), "name": sec["name"]}
+    except httpx.HTTPError as e:
+        raise SceneError(f"нет связи с Lichess ({type(e).__name__})") from e
+
+
+@route
 async def http_engine(b: dict):
     fen = str(b.get("fen") or "")
     try:
@@ -901,4 +965,6 @@ ROUTES = [
     Route("/api/rep/games", http_games, methods=["POST"]),
     Route("/api/rep/check", http_check, methods=["POST"]),
     Route("/api/rep/engine", http_engine, methods=["POST"]),
+    Route("/api/rep/puzzles", http_puzzles, methods=["POST"]),
+    Route("/api/rep/angle", http_angle, methods=["POST"]),
 ]
