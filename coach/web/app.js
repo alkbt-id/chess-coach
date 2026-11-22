@@ -882,7 +882,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
-const rep = { on: false, data: { sections: [], lessons: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null };
+const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
 
 const idxCache = new WeakMap();
@@ -906,7 +906,7 @@ function pathTo(sc, id) {
 }
 
 function studyBoard() {
-  if (repTrialBoard()) return; // a line being tried on a repertoire tree (REPERTOIRE)
+  if (repDrillBoard() || repTrialBoard()) return; // the repertoire drill, or a line being tried on a repertoire tree (REPERTOIRE)
   const node = curNode();
   const fen = node ? node.fen : START_FEN;
   const into = node && node === scene()?.root ? histOf(scene())?.plies.at(-1) : null; // the game's move into the board's start
@@ -927,7 +927,7 @@ async function onStudyMove(orig, dest) {
   let m;
   try { m = c.move({ from: orig, to: dest, promotion }); } catch { renderStudy(); return; }
   const uci = m.from + m.to + (m.promotion || "");
-  if (rep.on && scene()?.rep && repTry(uci)) return; // on the repertoire a new move is only tried
+  if (rep.on && (repDrillMove(uci) || (scene()?.rep && repTry(uci)))) return; // the drill's answer; on the repertoire a new move is only tried
   try {
     let sc = scene();
     if (!sc) {
@@ -993,7 +993,7 @@ function waitScene(id) {
 }
 
 function studyStep(dir) {
-  if (rep.on && repTrialStep(dir)) return;
+  if (rep.on && (rep.drill || repTrialStep(dir))) return; // no stepping through the moves during the drill
   const sc = scene();
   if (!sc) return;
   const e = tindex(sc).get(study.node) || { n: sc.root, p: null };
@@ -1179,14 +1179,14 @@ function treeHtml(root, cur, key = root.fen || root.id) {
 const ceval = { fen: null, res: null, deep: false, timer: null, seq: 0 };
 
 function engineArrow(fen) {
-  if (!study.engine || mode !== "study" || ceval.fen !== fen || !ceval.res?.lines?.[0]?.uci?.length) return [];
+  if (!study.engine || mode !== "study" || rep.drill || ceval.fen !== fen || !ceval.res?.lines?.[0]?.uci?.length) return [];
   const u = ceval.res.lines[0].uci[0];
   return [{ orig: u.slice(0, 2), dest: u.slice(2, 4), brush: "paleBlue" }];
 }
 
 function requestEval() {
   clearTimeout(ceval.timer);
-  if (!study.engine || mode !== "study" || isLive()) return;
+  if (!study.engine || mode !== "study" || isLive() || rep.drill) return; // the drill: no engine hints
   const fen = shownFen;
   if (ceval.fen === fen && ceval.deep) return;
   if (ceval.fen !== fen) { ceval.fen = fen; ceval.res = null; ceval.deep = false; }
@@ -1234,7 +1234,7 @@ function renderCeval() {
 
 function renderEvalBar() {
   const bar = $("#evalbar");
-  const on = study.engine && mode === "study" && !isLive();
+  const on = study.engine && mode === "study" && !isLive() && !rep.drill;
   if (bar.hidden === on) { bar.hidden = !on; layout(); }
   if (!on) return;
   const l = ceval.fen === shownFen ? ceval.res?.lines?.[0] : null;
@@ -3154,7 +3154,17 @@ function repSectionAt(tree, id) {
 // ---- the panel ----
 function repPanelHtml() {
   const s = repSec();
+  if (rep.drill) return repDrillHtml();
   return s ? repSectionHtml(s) : repTocHtml();
+}
+
+// «Тренировать»: what is due, or a run over everything when nothing is
+function repDrillButton(scope, id) {
+  const cards = drillCardsIn(scope);
+  if (!cards) return `<p class="hint">Тренировать пока нечего: в дереве нет твоих ходов${scope.section ? " в этом разделе" : ""}.</p>`;
+  const due = drillDueIn(scope);
+  return `<div class="rep-drill"><button type="button" class="btn small primary" id="${id}" data-practice="${due ? "" : "1"}">${due ? `Тренировать по памяти · ${due}` : "Повторить всё по памяти"}</button>
+    <span class="hint">${due ? `${due} из ${cards} ${plural(cards, "позиции", "позиций", "позиций")} пора повторить` : `всё повторено, ${cards} ${plural(cards, "позиция", "позиции", "позиций")}`}</span></div>`;
 }
 
 function repTocHtml() {
@@ -3175,6 +3185,7 @@ function repTocHtml() {
     <p class="hint">Дебюты, которые ты играешь, по разделам. Процент — сколько очков ты набрал в партиях раздела, рядом — сколько было партий. Выбери раздел, чтобы изучать его с Claude.</p>
     ${group("white")}${group("black")}
     ${retired.length ? `<details class="rep-group"><summary>Не играю · ${retired.length}</summary>${retired.map(row).join("")}</details>` : ""}
+    ${repDrillButton({}, "drill-all")}
     <div class="rep-actions"><button type="button" class="btn small" id="rep-new">＋ Новый дебют</button>
       <button type="button" class="btn small" id="rep-seed" title="Добавить разделы для дебютов, которые встретились в новых партиях">Обновить из партий</button></div>
     ${rep.form ? repFormHtml() : ""}
@@ -3211,6 +3222,7 @@ function repSectionHtml(s) {
     <div class="rep-meta"><span class="rep-path">${way}</span>${repScoreHtml(s)}</div>
     ${kids.length ? `<div class="rep-chips"><span class="bt-label">Внутри:</span>${kids.map((k) => `<button type="button" class="rchip" data-sec="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div>` : ""}
     <div class="rep-chips"><span class="bt-label">Уроки:</span>${lessonChips}<button type="button" class="rchip add" id="rep-lesson-new">＋ Новый урок</button></div>
+    ${repDrillButton({ section: s.id }, "drill-sec")}
     <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."} Увидеть его — попроси в чате «покажи конспект».</p>`;
   const boards = inLesson ? boardsOf(ch.cur) : [];
   const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски раздела"><button type="button" class="btab${onTree ? " on" : ""}" data-rep-tree>Дерево репертуара</button>
@@ -3314,6 +3326,233 @@ async function repTrialSave(asSection) {
     setStatus(`Здесь у тебя теперь ${tr.base.children.length + 1} хода; тренировка спросит первый. Сменить — правый клик по ходу → «Сделать главной линией».`);
     setTimeout(() => setStatus(""), 6000);
   }
+}
+
+// ---- the drill: the app plays the opponent's moves of a tree, the user plays their own from memory (coach/repertoire.py).
+// A card is a position where it is the user's move (key: colour + position, so another move order reaches the same card);
+// its answer is the main move there — or, on the way to a drilled section, that way's move. Due cards come first, a missed
+// one comes back in the same session, and every first answer is spaced on the server like the puzzles. ----
+const drillKey = (color, node) => `${color}:${fenKey(node.fen)}`;
+function drillDue(key) {
+  const d = rep.drill;
+  if (d?.again.has(key)) return true;
+  if (d?.done.has(key)) return false;
+  if (d?.practice) return true;
+  const c = rep.data.drill?.[key];
+  return !c || c.due <= Date.now();
+}
+const drillAnswer = (node, way) => way?.get(node.id) || node.children[0] || null;
+
+// cards from `node` on that `pred` accepts: along the answer on the user's turn, every reply on the opponent's
+// (only the way's move on the way to a section); `skip` = retired sections
+function drillWalk(color, node, skip, way, pred) {
+  if (!node || skip.has(node.id) || !node.children.length) return 0;
+  if (turnOf(node.fen) === color) return (pred(drillKey(color, node)) ? 1 : 0) + drillWalk(color, drillAnswer(node, way), skip, way, pred);
+  const w = way?.get(node.id);
+  return w ? drillWalk(color, w, skip, way, pred) : node.children.reduce((n, c) => n + drillWalk(color, c, skip, way, pred), 0);
+}
+
+// where a drill goes: one section (from the start of its tree, by the way to it) or the whole repertoire
+function drillRoots(scope) {
+  const retired = rep.data.sections.filter((s) => s.status === "retired");
+  const s = scope.section ? repSec(scope.section) : null;
+  if (s) {
+    const tree = repTree(s.color);
+    if (!tree || !tindex(tree).get(s.node)) return [];
+    const way = new Map();
+    let prev = tree.root;
+    for (const n of pathTo(tree, s.node)) { way.set(prev.id, n); prev = n; }
+    const onWay = new Set([tree.root.id, ...way.values()].map((n) => (typeof n === "string" ? n : n.id)));
+    const skip = new Set(retired.filter((r) => r.color === s.color && r.id !== s.id && !onWay.has(r.node)).map((r) => r.node));
+    return [{ color: s.color, tree, start: tree.root, way, skip }];
+  }
+  return ["white", "black"].map((c) => repTree(c)).filter(Boolean)
+    .map((tree) => ({ color: tree.rep, tree, start: tree.root, way: null, skip: new Set(retired.filter((r) => r.color === tree.rep).map((r) => r.node)) }));
+}
+const drillCount = (scope, pred) => drillRoots(scope).reduce((n, r) => n + drillWalk(r.color, r.start, r.skip, r.way, pred), 0);
+const drillDueIn = (scope) => drillCount(scope, drillDue);
+const drillCardsIn = (scope) => drillCount(scope, () => true);
+function drillNextDue(scope) { // the earliest time a card of the scope comes due, ms
+  let at = Infinity;
+  drillCount(scope, (k) => { const c = rep.data.drill?.[k]; if (c && c.due > Date.now()) at = Math.min(at, c.due); return false; });
+  return at < Infinity ? at : null;
+}
+function repIn(ms) {
+  const min = Math.max(1, Math.round((ms - Date.now()) / 60000));
+  if (min < 60) return `через ${min} мин`;
+  if (min < 20 * 60) return `через ${Math.round(min / 60)} ч`;
+  const days = Math.round(min / 1440);
+  return days <= 1 ? "завтра" : `через ${days} ${plural(days, "день", "дня", "дней")}`;
+}
+function pickWeighted(list, w) {
+  let k = Math.random() * list.reduce((n, x) => n + w(x), 0);
+  for (const x of list) { k -= w(x); if (k < 0) return x; }
+  return list.at(-1);
+}
+const drillTree = () => study.scenes.find((s) => s.id === rep.drill?.line?.tree) || null;
+function drillNode() { const t = drillTree(); return t ? tindex(t).get(rep.drill.line.cur)?.n || null : null; }
+
+function drillStart(scope, practice = false) {
+  repDrillStop(false);
+  rep.trial = null;
+  closePreviewSilently();
+  rep.drill = { scope, practice, again: new Set(), done: new Set(), ok: 0, fail: 0, line: null, over: false, timer: null };
+  drillNextLine();
+}
+
+function repDrillStop(render = true) {
+  const d = rep.drill;
+  if (!d) return;
+  clearTimeout(d.timer);
+  rep.drill = null;
+  if (!render || !rep.on || mode !== "study") return;
+  const s = repSec();
+  study.id = repTree(s?.color || rep.color)?.id ?? null;
+  study.node = s ? s.node : "root";
+  renderStudy();
+  updateCounts();
+}
+
+function drillNextLine() {
+  const d = rep.drill;
+  if (!d) return;
+  const roots = drillRoots(d.scope).map((r) => ({ ...r, due: drillWalk(r.color, r.start, r.skip, r.way, drillDue) })).filter((r) => r.due > 0);
+  if (!roots.length) { d.line = null; d.over = true; renderStudy(); return; }
+  const r = pickWeighted(roots, (x) => x.due);
+  d.line = { color: r.color, tree: r.tree.id, cur: r.start.id, skip: r.skip, way: r.way, ask: null, wrong: false, hinted: false, alt: "", end: false };
+  study.id = r.tree.id;
+  drillStep();
+}
+
+// the line goes on from its node: a due position of the user waits for their move; the opponent's replies and the
+// user's moves they already know (not due, or answered right earlier in this session) are played by the app
+function drillStep() {
+  const d = rep.drill;
+  const L = d?.line;
+  if (!L) return;
+  const node = drillNode();
+  if (!node) { drillNextLine(); return; }
+  study.node = node.id;
+  Object.assign(L, { ask: null, wrong: false, hinted: false, alt: "" });
+  const due = (n) => drillWalk(L.color, n, L.skip, L.way, drillDue);
+  if (!due(node)) { // nothing due further on: this line is done
+    L.end = true;
+    renderStudy();
+    d.timer = setTimeout(() => { if (rep.drill === d) drillNextLine(); }, 1100);
+    return;
+  }
+  let next;
+  if (turnOf(node.fen) === L.color) { // the user's move: asked when due, else played for them like a known move
+    if (drillDue(drillKey(L.color, node))) { L.ask = node.id; renderStudy(); return; }
+    next = drillAnswer(node, L.way);
+  } else next = L.way?.get(node.id) || pickWeighted(node.children.filter((c) => due(c) > 0), due);
+  renderStudy();
+  d.timer = setTimeout(() => {
+    if (rep.drill !== d) return;
+    L.cur = next.id;
+    moveSound(next.san);
+    drillStep();
+  }, node.id === "root" ? 300 : 600);
+}
+
+function repDrillMove(uci) { // true: the drill took the move
+  const d = rep.on ? rep.drill : null;
+  if (!d) return false;
+  const L = d.line;
+  const node = drillNode();
+  if (!L?.ask || !node || node.id !== L.ask) { renderStudy(); return true; }
+  const want = drillAnswer(node, L.way);
+  const key = drillKey(L.color, node);
+  if (uci === want.uci) {
+    const first = !L.wrong && !L.hinted;
+    if (first && d.again.has(key)) d.again.delete(key); // a card missed earlier in this session, now right
+    else if (first && drillDue(key)) drillRecord(key, true);
+    if (first) d.ok++;
+    d.done.add(key);
+    moveSound(want.san);
+    L.cur = want.id;
+    drillStep();
+    return true;
+  }
+  const alt = node.children.find((c) => c.uci === uci);
+  if (alt && alt !== want) { L.alt = alt.san; renderStudy(); return true; } // the user's other move here: not a mistake
+  if (!L.wrong && !L.hinted) drillMiss(key);
+  L.wrong = true;
+  renderStudy();
+  return true;
+}
+
+function drillMiss(key) {
+  const d = rep.drill;
+  d.fail++;
+  d.again.add(key);
+  drillRecord(key, false);
+}
+
+async function drillRecord(key, ok) {
+  try {
+    rep.data.drill[key] = await post("/api/rep/drill", { key, ok });
+    updateCounts();
+  } catch (err) { setStatus(String(err.message), true); }
+}
+
+function drillHint() {
+  const L = rep.drill?.line;
+  if (!L?.ask || L.hinted || L.wrong) return;
+  L.hinted = true;
+  drillMiss(drillKey(L.color, drillNode()));
+  renderStudy();
+}
+
+function repDrillBoard() {
+  const d = rep.on ? rep.drill : null;
+  if (!d) return false;
+  const node = drillNode();
+  if (!node) { setBoard({ fen: shownFen, orientation: boardOrientation() }); return true; }
+  const L = d.line;
+  const want = L.ask && (L.wrong || L.hinted) ? drillAnswer(node, L.way) : null;
+  setBoard({
+    fen: node.fen, orientation: boardOrientation(), lastMove: node.uci ? sq(node.uci) : undefined,
+    shapes: want ? [{ orig: want.uci.slice(0, 2), dest: want.uci.slice(2, 4), brush: "green" }] : [],
+    movable: L.ask ? { color: L.color, dests: legalDests(node.fen), after: onStudyMove } : null,
+  });
+  return true;
+}
+
+function repDrillHtml() {
+  const d = rep.drill;
+  const s = d.scope.section ? repSec(d.scope.section) : null;
+  const head = `<div class="rep-crumbs"><button type="button" class="link-btn" id="drill-stop">← Закончить тренировку</button></div>
+    <h1 class="title">Тренировка: ${esc(s ? s.name : "весь репертуар")}</h1>
+    <div class="drill-stats"><span>верно <b>${d.ok}</b></span><span>ошибок <b>${d.fail}</b></span><span>осталось <b>${drillDueIn(d.scope)}</b></span>${d.practice ? `<span class="rtag">повтор всего</span>` : ""}</div>`;
+  if (d.over) {
+    const cards = drillCardsIn(d.scope);
+    const next = drillNextDue(d.scope);
+    const text = !cards ? "Здесь пока нечего тренировать: в дереве нет твоих ходов. Добавь их на уроке с Claude или кнопкой «Записать в репертуар»."
+      : `${d.ok + d.fail ? `Готово: верно ${d.ok}, ошибок ${d.fail}.` : "Сейчас повторять нечего."}${next ? ` Следующее повторение — ${repIn(next)}.` : ""}`;
+    return `${head}<div class="drill-box ok">${text}</div>
+      <div class="rep-actions">${cards ? `<button type="button" class="btn small" id="drill-again">Повторить всё ещё раз</button>` : ""}
+        <button type="button" class="btn small" id="drill-stop2">${s ? "К разделу" : "К оглавлению"}</button></div>`;
+  }
+  const L = d.line;
+  const tree = drillTree();
+  const node = drillNode();
+  const way = tree && node ? pathTo(tree, node.id) : [];
+  const line = way.map((n, i) => `${n.num.endsWith(".") || i === 0 ? `<span class="num">${esc(n.num)}</span>` : ""}${esc(n.san)}`).join(" ");
+  let box;
+  if (L.end) box = `<div class="drill-box ok">Вариант пройден ✓</div>`;
+  else if (!L.ask) box = `<div class="drill-box">Соперник ходит…</div>`;
+  else if (L.wrong || L.hinted) {
+    const want = drillAnswer(node, L.way);
+    box = `<div class="drill-box bad"><div>${L.hinted ? "Подсказка" : "Не так"}: в репертуаре здесь <b>${esc(want.num.endsWith(".") ? want.num : want.num.replace("…", "..."))}${esc(want.san)}</b> — сыграй его. Эту позицию спрошу ещё раз.</div>
+      ${want.comment ? `<div class="rich">${md(want.comment)}</div>` : ""}
+      <div class="actions"><button type="button" class="link-btn" id="drill-why">Спросить Claude, почему так</button></div></div>`;
+  } else {
+    box = `<div class="drill-box"><div>${L.alt ? `${esc(L.alt)} — твой запасной ход. А какой здесь главный?` : `Твой ход за ${L.color === "white" ? "белых" : "чёрных"}. Что ты здесь играешь?`}</div>
+      <div class="actions"><button type="button" class="btn small" id="drill-hint">Подсказка</button></div></div>`;
+  }
+  return `${head}${box}<div class="rep-path drill-line">${line || "начальная позиция"}</div>
+    <p class="hint">Программа ходит за соперника по дереву репертуара, а ты по памяти отвечаешь там, где пора повторить; ходы, которые ты уже помнишь, она делает сама. Верный ответ вернёт позицию через день, потом всё реже; ошибка — через 10 минут и ещё раз в этой тренировке.</p>`;
 }
 
 // ---- moving around ----
@@ -3431,7 +3670,7 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why");
   if (!t) return;
   const s = repSec();
   try {
@@ -3468,6 +3707,18 @@ $("#panel").addEventListener("click", async (e) => {
     else if (t.id === "rep-trial-save") await repTrialSave(false);
     else if (t.id === "rep-trial-section") await repTrialSave(true);
     else if (t.id === "rep-trial-drop") { rep.trial = null; renderStudy(); }
+    else if (t.id === "drill-sec" && s) drillStart({ section: s.id }, !!t.dataset.practice);
+    else if (t.id === "drill-all") drillStart({}, !!t.dataset.practice);
+    else if (t.id === "drill-again" && rep.drill) drillStart(rep.drill.scope, true);
+    else if (t.id === "drill-stop" || t.id === "drill-stop2") repDrillStop();
+    else if (t.id === "drill-hint") drillHint();
+    else if (t.id === "drill-why" && rep.drill?.line) {
+      const L = rep.drill.line;
+      const node = drillNode();
+      const want = node && drillAnswer(node, L.way);
+      const way = pathTo(drillTree(), node.id).map((n, i) => (n.num.endsWith(".") || i === 0 ? n.num : "") + n.san).join(" ");
+      if (want) { setChatOpen(true); askClaude(`Почему в моём репертуаре ${way ? `после ${way}` : "в начальной позиции"} играется ${want.num.endsWith(".") ? want.num : ""}${want.san}?`); }
+    }
   } catch (err) { setStatus(String(err.message), true); }
 });
 
@@ -3497,6 +3748,8 @@ $("#panel").addEventListener("keydown", (e) => {
 // =====================================================================
 function updateCounts() {
   $("#play-count").textContent = isLive() ? "●" : "";
+  const repDue = drillDueIn({});
+  $("#rep-count").textContent = repDue ? `· ${repDue}` : "";
   $("#scene-count").textContent = study.scenes.filter((s) => !s.rep).length || "";
   const now = Date.now();
   const due = pz.list.filter((p) => pz.prog[p.id] && pz.prog[p.id].due <= now).length;
@@ -3511,6 +3764,7 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   closePreviewSilently();
   const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
   rep.on = m === "rep";
+  if (!rep.on) repDrillStop(false);
   if (rep.on) m = "study";
   mode = m;
   $$(".mode").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === view)));
@@ -3669,6 +3923,7 @@ async function onEvent(ev) {
       break;
     }
     case "chat_list": case "chat_entry": case "chat_delta": onChatEvent(ev); break;
+    case "rep_drill": rep.data.drill[ev.key] = ev.card; updateCounts(); if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); break;
     case "rep": Object.assign(rep.data, ev.rep); if (rep.on && mode === "study") { renderStudyPanel(); if (!curChat()) renderChatLog(); } break;
     case "reload": location.reload(); break;
     case "closed_chats": // a tab closed or reopened in another window (the Mac or the iPad)

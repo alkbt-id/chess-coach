@@ -505,3 +505,12 @@ a.btn { text-decoration: none; display: inline-block; }
 }
 .rep-trial { display: grid; gap: 6px; border: 1px dashed var(--accent); background: var(--accent-soft); border-radius: 9px; padding: 8px 10px; font-size: 13px; }
 .rep-trial .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* «Репертуар»: the drill from memory */
+.rep-drill { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.drill-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.drill-stats b { color: var(--ink); }
+.drill-box { display: grid; gap: 8px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 9px; padding: 10px 12px; font-size: 14px; }
+.drill-box.ok { border-color: var(--good); background: var(--good-soft); }
+.drill-box.bad { border-color: var(--bad); background: var(--bad-soft); }
+.drill-box .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.drill-line { color: var(--muted); }

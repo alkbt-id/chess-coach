@@ -12,6 +12,10 @@
   section (and general ones): its memory between lessons, not shown in the window. They are brought up to date
   when a lesson's tab is closed or the lesson has been quiet for IDLE seconds; a lesson whose update was cut off
   (the app quit) is caught up by the next lesson of that section, which reads its transcript.
+- The drill (app.js REPERTOIRE): the app plays the opponent's moves of a tree and the user plays their own from
+  memory. A card is a position where it is the user's move, keyed by colour and position (another move order
+  reaches the same card); its answer is the main move there (the first of the user's moves). Cards are spaced
+  like the puzzles: a right answer moves the card a step further (DRILL_STEPS), a wrong one brings it back soon.
 - While a live Lichess game is on (S.lock) the repertoire is closed: it is opening preparation.
 """
 
@@ -40,6 +44,7 @@ TITLE = {"white": "За белых", "black": "За чёрных"}
 MIN_GAMES = 3
 PLIES = 24  # how far a game is followed for sections and their statistics
 IDLE = 15 * 60
+DRILL_STEPS = [10 * 60, 86400, 3 * 86400, 7 * 86400, 16 * 86400, 35 * 86400, 80 * 86400]  # seconds until a card is due again
 # families too wide to be one opening: their variation is the section («Queen's Pawn Game: Chigorin Variation»)
 GENERIC = {"King's Pawn Game", "Queen's Pawn Game", "Indian Defense", "King's Knight Opening", "King's Pawn Opening", "Zukertort Opening"}
 
@@ -102,7 +107,7 @@ class Repertoire:
                 sc = scenes.new_scene(TREE[c], TITLE[c], chess.STARTING_FEN, c)
                 sc["rep"] = c
                 self.d["trees"][c] = sc
-        for key, default in (("sections", []), ("notes", {}), ("lessons", {}), ("seq", 0), ("seeded", False)):
+        for key, default in (("sections", []), ("notes", {}), ("lessons", {}), ("seq", 0), ("seeded", False), ("drill", {})):
             self.d.setdefault(key, default)
         self.task: asyncio.Task | None = None
 
@@ -233,10 +238,61 @@ class Repertoire:
                          "notes_at": (self.d["notes"].get(s["id"]) or {}).get("at"),
                          "lessons": [cid for cid, les in self.d["lessons"].items() if les["section"] == s["id"] and cid in CHATS.chats]})
         secs.sort(key=lambda s: (COLORS.index(s["color"]), order.get((s["color"], s["node"]), 0)))
-        out = {"sections": secs, "lessons": {cid: {"section": les["section"]} for cid, les in self.d["lessons"].items() if cid in CHATS.chats}}
+        out = {"sections": secs, "lessons": {cid: {"section": les["section"]} for cid, les in self.d["lessons"].items() if cid in CHATS.chats},
+               "drill": self.d["drill"]}
         if trees:
             out["trees"] = [self.trees[c] for c in COLORS]
         return out
+
+    # ---- the drill ----
+    def drill_answer(self, key: str, ok: bool) -> dict:
+        color, _, pos = key.partition(":")
+        if color not in COLORS or len(pos.split()) != 4:
+            raise SceneError(f"bad card {key!r}")
+        c = self.d["drill"].get(key) or {"box": 0, "ok": 0, "fail": 0}
+        box = min(c["box"] + 1, len(DRILL_STEPS) - 1) if ok else 0
+        now = time.time()
+        c.update(box=box, due=int((now + DRILL_STEPS[box]) * 1000), last=int(now * 1000), ok=c["ok"] + int(ok), fail=c["fail"] + int(not ok))
+        self.d["drill"][key] = c
+        self.save()
+        return c
+
+    def drill_cards(self, sec: dict) -> list[tuple[str, str]]:
+        """(card key, «path → answer») of a section: the user's moves on the way to it and in its tree (main moves)."""
+        tree = self.trees[sec["color"]]
+        mine = chess.WHITE if sec["color"] == "white" else chess.BLACK
+        path = scenes.path_of(tree, sec["node"])
+        out = []
+
+        def card(node: dict, answer: dict) -> None:
+            if chess.Board(node["fen"]).turn == mine:
+                before = san_path(scenes.path_of(tree, node["id"])) or "(начало)"
+                out.append((f"{sec['color']}:{' '.join(node['fen'].split()[:4])}", f"{before} → {answer['san']}"))
+
+        for parent, child in zip([tree["root"], *path[:-1]], path):
+            card(parent, child)
+
+        def below(node: dict) -> None:
+            if not node["children"]:
+                return
+            if chess.Board(node["fen"]).turn == mine:
+                card(node, node["children"][0])
+                below(node["children"][0])
+            else:
+                for c in node["children"]:
+                    below(c)
+
+        below(self.node(sec))
+        return out
+
+    def drill_summary(self, sec: dict) -> dict:
+        now = time.time() * 1000
+        cards = self.drill_cards(sec)
+        prog = [(text, self.d["drill"].get(key)) for key, text in cards]
+        missed = sorted((p for p in prog if p[1] and p[1]["fail"]), key=lambda p: (-p[1]["fail"], p[1]["ok"]))
+        return {"cards": len(cards), "never_trained": sum(1 for _, c in prog if c is None),
+                "due_now": sum(1 for _, c in prog if c is None or c["due"] <= now),
+                "often_missed": [f"{t}: ошибок {c['fail']}, верно {c['ok']}" for t, c in missed[:8]]}
 
     # ---- notes ----
     def notes(self, key: str) -> str:
@@ -362,6 +418,8 @@ leading to a section may come from the user's games. Lessons are chats bound to 
   one move per position (a second one is an alternative); on the opponent's side add every reply worth preparing.
 - `repertoire_edit` (promote, delete, comment, goto), `repertoire_section` (create, rename, retire, restore): only
   when the user asks. A section the user stopped playing is retired, never deleted.
+- The user drills the repertoire from memory in the app (the app plays the opponent's moves, the user their own);
+  `repertoire_state` shows a section's drill results — positions they often miss are worth a lesson.
 - `repertoire_notes` is your memory between lessons (each chat is a separate session). The user does not see the
   notes unless they ask; when they ask, show them in the chat and fix what they correct.
 """
@@ -429,6 +487,7 @@ def tools(chat_id: str) -> list:
                 "notes": REP.notes(sec["id"]),
                 "games": REP.stats(sec, recent=12),
                 "user_moves_in_games": _first_moves(gl, node, tree),
+                "drill": REP.drill_summary(sec),
             }
         return out
 
@@ -610,6 +669,13 @@ async def http_lesson(b: dict):
 
 
 @route
+async def http_drill(b: dict):
+    card = REP.drill_answer(str(b.get("key", "")), bool(b.get("ok")))
+    await broadcast({"type": "rep_drill", "key": b["key"], "card": card})
+    return card
+
+
+@route
 async def http_seed(_: dict):
     n = REP.seed()
     await broadcast({"type": "scene", "scene": REP.trees["white"], "goto": None})
@@ -623,4 +689,5 @@ ROUTES = [
     Route("/api/rep/section", http_section, methods=["POST"]),
     Route("/api/rep/lesson", http_lesson, methods=["POST"]),
     Route("/api/rep/seed", http_seed, methods=["POST"]),
+    Route("/api/rep/drill", http_drill, methods=["POST"]),
 ]
