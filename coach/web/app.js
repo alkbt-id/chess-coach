@@ -1021,6 +1021,7 @@ function highlightMoves() {
   const key = fenKey(shownFen);
   const onLine = boardLineKeys();
   for (const seq of $$(".mseq")) {
+    if (seq.dataset.nf !== undefined) continue; // lists of lines (the repertoire's): no frames, they would be on every row
     const line = seqLine(seq);
     const flags = $$(".mvl", seq).map((t, i) => {
       const k = line?.plies?.[i] ? fenKey(line.plies[i].fen) : null;
@@ -3380,7 +3381,7 @@ function repLineHtml(ucis, { from = 0, bold = -1 } = {}) {
   const line = playLine(START_FEN, ucis);
   if (line.plies.length <= from) return "";
   const key = regLine(line);
-  return `<span class="mseq" data-line="${key}">${line.plies.map((p, i) => (i < from ? "" : `${p.num.endsWith(".") || i === from ? p.num : ""}<b class="mvl${i === bold ? " rl-hl" : ""}" data-i="${i}">${esc(p.san)}</b>`)).filter(Boolean).join(" ")}</span>`;
+  return `<span class="mseq" data-nf data-line="${key}">${line.plies.map((p, i) => (i < from ? "" : `${p.num.endsWith(".") || i === from ? p.num : ""}<b class="mvl${i === bold ? " rl-hl" : ""}" data-i="${i}">${esc(p.san)}</b>`)).filter(Boolean).join(" ")}</span>`;
 }
 const repWay = (tree, nodeId) => (tree && tindex(tree).get(nodeId) ? pathTo(tree, nodeId).map((n) => n.uci) : []);
 

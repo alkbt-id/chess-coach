@@ -529,8 +529,8 @@ a.btn { text-decoration: none; display: inline-block; }
 .rg-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; font-size: 13px; }
 .rg-row .rg-n { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .rg-row .rg-act { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 12px; }
-.rg-row.user b, .rg-chk.user { color: var(--bad); }
-.rg-row.opponent b, .rg-chk.opponent { color: var(--accent); }
+.rg-chk.user { color: var(--bad); }
+.rg-chk.opponent { color: var(--accent); }
 .rg-chk.end, .rg-chk.in { color: var(--good); }
 .rg-exp { color: var(--muted); }
 .rg-games { display: grid; gap: 2px; }
@@ -544,7 +544,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .rep-after.user { border-color: var(--bad); }
 .rep-after.opponent { border-color: var(--accent); }
 .rep-after.end, .rep-after.in { border-color: var(--good); }
-.rg-row.habit b, .rg-chk.habit { color: var(--muted); }
+.rg-chk.habit { color: var(--muted); }
 .mvl.rl-hl { color: var(--bad); }
 .rg-row.opponent .mvl.rl-hl { color: var(--accent); }
 .rg-row.habit .mvl.rl-hl { color: var(--muted); }
