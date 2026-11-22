@@ -3122,10 +3122,6 @@ const lessonSection = (cid) => (cid ? rep.data.lessons[cid]?.section || null : n
 const lessonsOf = (sid) => ch.list.filter((c) => lessonSection(c.id) === sid);
 const repQuickHtml = () => `<div class="quick">${REP_QUICK.map((q) => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`;
 
-function plural(n, one, few, many) {
-  const a = n % 10, b = n % 100;
-  return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
-}
 function repAgo(ts) {
   const min = Math.round((Date.now() / 1000 - ts) / 60);
   if (min < 1) return "только что";

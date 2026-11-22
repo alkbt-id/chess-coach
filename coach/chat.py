@@ -388,10 +388,12 @@ class ChatManager:
         chat = self.chats.get(cid)
         if not chat:
             return
-        if chat.busy or chat.waiting:
-            chat.closing = True
-        elif repertoire.REP.notes_due(chat) and not S.lock:  # a lesson: Claude updates its notes, then stops
+        # a lesson of the repertoire: Claude brings its notes up to date after what is still queued, then stops
+        notes = not S.lock and (repertoire.REP.notes_due(chat)
+                                or (cid in repertoire.REP.d["lessons"] and any(not w["note"] for w in chat.waiting)))
+        if notes:
             await repertoire.REP.ask_notes(chat)
+        if chat.busy or chat.waiting:
             chat.closing = True
         else:
             await self._stop_worker(chat)
