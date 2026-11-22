@@ -60,6 +60,13 @@
         <div class="mat cg-wrap" id="mat-bottom"></div>
         <button type="button" class="icon flip-btn" id="flip" title="Перевернуть доску (F)">⇅ Перевернуть</button>
       </div>
+      <!-- move buttons under the board (big on a touch screen); a one-finger swipe on the board does prev/next too -->
+      <div class="nav board-nav" id="nav">
+        <button type="button" class="icon" data-nav="first" title="В начало (↑)">⏮</button>
+        <button type="button" class="icon" data-nav="prev" title="Назад (←) · свайп вправо по доске">◀</button>
+        <button type="button" class="icon" data-nav="next" title="Вперёд (→) · свайп влево по доске">▶</button>
+        <button type="button" class="icon" data-nav="last" title="В конец (↓)">⏭</button>
+      </div>
       <div class="meta" id="meta"></div>
     </section>
     <div class="gutter" id="g1" title="Тяни, чтобы поменять ширину · двойной клик — авто"></div>
@@ -68,12 +75,6 @@
       <div class="preview" id="preview" hidden></div>
       <div class="side-body" id="panel"></div>
       <div class="side-foot" id="foot">
-        <div class="nav" id="nav">
-          <button type="button" class="icon" data-nav="first" title="В начало (↑)">⏮</button>
-          <button type="button" class="icon" data-nav="prev" title="Назад (←)">◀</button>
-          <button type="button" class="icon" data-nav="next" title="Вперёд (→)">▶</button>
-          <button type="button" class="icon" data-nav="last" title="В конец (↓)">⏭</button>
-        </div>
         <div class="foot-right">
           <label class="switch" id="ask-switch" title="В диаграммах Claude и в позициях из задач твой ход = просьба к Claude посчитать вариант. На своей доске — кнопкой под деревом."><input type="checkbox" id="auto-ask"><span>Claude разбирает мои ходы</span></label>
           <label class="switch" id="engine-switch" title="Stockfish (L)"><input type="checkbox" id="engine-on"><span>Stockfish</span></label>

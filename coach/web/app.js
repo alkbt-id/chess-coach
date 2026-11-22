@@ -192,6 +192,35 @@ for (const t of ["mousedown", "touchstart"]) {
   $("#board").addEventListener(t, () => cg.state.dom.bounds.clear(), { capture: true, passive: true });
 }
 
+// One-finger swipe across the board (the iPad): right to left = next move, left to right = previous, like turning a
+// page. A press that starts a move (a piece that can move, or a target of the selected piece) stays a move.
+const swipe = { start: null };
+function pressMoves(key) {
+  const st = cg.state;
+  const piece = key && st.pieces.get(key);
+  if (piece && (st.movable.color === "both" || st.movable.color === piece.color)) return true; // a move or a premove
+  return !!(key && st.selected && st.movable.dests?.get(st.selected)?.includes(key));
+}
+$("#board-wrap").addEventListener("touchstart", (e) => {
+  swipe.start = null;
+  if (e.touches.length !== 1) return;
+  const t = e.touches[0];
+  cg.state.dom.bounds.clear();
+  if (pressMoves(cg.getKeyAtDomPos([t.clientX, t.clientY]))) return;
+  swipe.start = { x: t.clientX, y: t.clientY, at: Date.now(), fen: shownFen };
+}, { capture: true, passive: true });
+document.addEventListener("touchmove", (e) => { if (e.touches.length > 1) swipe.start = null; }, { passive: true });
+document.addEventListener("touchend", (e) => {
+  const s = swipe.start;
+  swipe.start = null;
+  const t = e.changedTouches[0];
+  if (!s || !t || shownFen !== s.fen || Date.now() - s.at > 1000) return;
+  const dx = t.clientX - s.x, dy = t.clientY - s.y;
+  if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx) * 0.7) return;
+  cg.selectSquare(null);
+  swipeStep(dx < 0 ? "next" : "prev");
+}, { passive: true });
+
 // chessground rebuilds the board when the orientation flips (and on redrawAll). A redraw queued just before that
 // still runs on the old, detached board and marks the shapes as drawn, so the new board kept stale arrows
 // (Stockfish's arrow from «Разбор» stayed over the game in «Игра»). One frame later all shapes are drawn again.
@@ -218,7 +247,7 @@ function layout() {
   const L = $("#layout");
   if (!L.clientWidth) return;
   const W = L.clientWidth - LAY.padX;
-  const H = L.clientHeight - LAY.padY - LAY.meta;
+  const H = L.clientHeight - LAY.padY - LAY.meta - ($("#nav").offsetHeight + 4); // the move buttons under the board
   const chatOn = !L.classList.contains("no-chat");
   const evalW = $("#evalbar").hidden ? 0 : 22;
   const gut = LAY.gutter * (chatOn ? 2 : 1);
@@ -2871,6 +2900,12 @@ $("#auto-ask").addEventListener("change", (e) => {
   if (!study.autoAsk) clearTimeout(askTimer);
   http.send("PUT", "/api/settings", { autoAsk: study.autoAsk }).catch(() => {});
 });
+
+function swipeStep(dir) { // what ← / → do in each mode
+  if (preview) previewStep(dir);
+  else if (mode === "play") playStep(dir);
+  else if (mode === "study") studyStep(dir);
+}
 
 function setEngine(on) {
   study.engine = on;

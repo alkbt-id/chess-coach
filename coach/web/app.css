@@ -84,7 +84,7 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .gutter::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 4px; width: 2px; border-radius: 2px; background: transparent; transition: background .15s; }
 .gutter:hover::after, .gutter.drag::after { background: var(--accent-bg); }
 body.resizing { cursor: col-resize; user-select: none; }
-.board-col { display: grid; grid-template-rows: auto auto auto 1fr; gap: 4px; min-height: 0; min-width: 0; }
+.board-col { display: grid; grid-template-rows: auto auto auto auto 1fr; gap: 4px; min-height: 0; min-width: 0; }
 .board-row { display: flex; gap: 6px; }
 .board-wrap { width: 480px; height: 480px; flex: none; border-radius: 3px; overflow: hidden; box-shadow: 0 10px 28px -14px rgba(0,0,0,.5); }
 #board { width: 100%; height: 100%; }
@@ -313,6 +313,13 @@ cg-board square.hl { background: rgba(255, 190, 0, .5); }
 .board-foot { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .board-foot .mat { flex: 1; min-width: 0; }
 .flip-btn { flex: none; }
+/* ⏮ ◀ ▶ ⏭ under the board, as wide as the board; on a touch screen (the iPad) big enough for a finger */
+.board-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.board-nav .icon { height: 32px; font-size: 14px; }
+@media (any-pointer: coarse) {
+  .board-nav { gap: 8px; }
+  .board-nav .icon { height: 56px; font-size: 26px; border-radius: 10px; touch-action: manipulation; }
+}
 .mat.cg-wrap piece { position: static; display: inline-block; width: 36px; height: 36px; margin-right: -15px; transform: none; z-index: auto; filter: grayscale(.3); will-change: auto; }
 .mat .grp piece:last-child { margin-right: 0; }
 .side-foot { flex-wrap: wrap; row-gap: 4px; }
