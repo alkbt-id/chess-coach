@@ -496,6 +496,8 @@ async def lpuzzle_explain(request: Request):
 
 @contextlib.asynccontextmanager
 async def lifespan(_: Starlette):
+    with contextlib.suppress(Exception):  # an old review board without its players only lacks the names
+        review.backfill_players()
     await live.L.start()
     yield
     await live.L.close()

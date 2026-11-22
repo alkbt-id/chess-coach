@@ -1124,6 +1124,7 @@ function studyPanelHtml() {
   return `${tabs}
     ${newpos}
     <h1 class="title">${esc(sc.title)}</h1>
+    ${playersHtml(sc)}
     ${reviewHtml(sc)}
     ${cevalHtml()}
     ${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
@@ -1147,6 +1148,18 @@ function allBoardsHtml() {
   return `<select id="all-boards" class="all-boards" aria-label="Все доски" title="Все доски всех чатов: доска другого чата откроется вместе со своим чатом">
       <option value="" selected disabled>Все доски</option>
       ${groups.map(([t, l]) => `<optgroup label="${esc(t)}">${l.map((x) => `<option value="${esc(x.id)}">${esc(x.title)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+}
+
+// a game review: who had White and who had Black, the user's side marked
+function playersHtml(sc) {
+  const g = sc.game;
+  if (!g?.color) return "";
+  const side = (c) => {
+    const p = g.players?.[c];
+    const who = p ? `${esc(p.name)}${p.rating ? ` (${p.rating})` : ""}` : c === g.color ? "ты" : "соперник";
+    return `<span><i class="pc ${c}"></i>${c === "white" ? "Белые" : "Чёрные"}: <b>${who}</b>${p && c === g.color ? " — ты" : ""}</span>`;
+  };
+  return `<div class="players">${side("white")}${side("black")}</div>`;
 }
 
 // a game review (coach/review.py): Stockfish's progress, then «ask Claude» and the link to the game

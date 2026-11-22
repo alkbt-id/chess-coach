@@ -63,6 +63,16 @@ def stored_games() -> list[dict]:
     return _cache["games"]
 
 
+def _players(g: dict) -> dict:
+    """Both sides of a stored game, for the review board: {white: {name, rating}, black: {name, rating}}."""
+    out = {}
+    for side in ("white", "black"):
+        p = (g.get("players") or {}).get(side) or {}
+        name = (p.get("user") or {}).get("name") or (f"Компьютер, уровень {p['aiLevel']}" if p.get("aiLevel") else "?")
+        out[side] = {"name": name, "rating": p.get("rating")}
+    return out
+
+
 def _summary(g: dict) -> dict:
     """A stored Lichess game -> one row of the history list."""
     players = g.get("players", {})
@@ -77,6 +87,7 @@ def _summary(g: dict) -> dict:
         "oppRating": opp.get("rating"), "rating": mine.get("rating"), "diff": mine.get("ratingDiff"),
         "result": "draw" if not winner else ("win" if winner == color else "loss"), "status": g.get("status"),
         "opening": (g.get("opening") or {}).get("name", ""), "plies": len((g.get("moves") or "").split()),
+        "players": _players(g),
     }
 
 
@@ -89,6 +100,7 @@ def _live_summary(lg) -> dict:
         "opp": opp["name"], "oppRating": opp["rating"], "rating": p[p["color"]]["rating"], "diff": p["ratingDiff"],
         "result": "draw" if not p["winner"] else ("win" if p["winner"] == p["color"] else "loss"), "status": p["status"],
         "opening": "", "plies": len(p["moves"]),
+        "players": {side: {"name": p[side]["name"], "rating": p[side]["rating"]} for side in ("white", "black")},
     }
 
 
@@ -143,6 +155,18 @@ def _title(s: dict) -> str:
     return " · ".join(x for x in (f"{s['opp']}{rating}", s.get("tc"), date, result) if x)
 
 
+def backfill_players() -> None:
+    """Review boards made before they kept both players: add them from the stored games (at server start)."""
+    todo = {sc["game"]["lichess"]: sc for sc in S.study["scenes"]
+            if (sc.get("game") or {}).get("lichess") and "players" not in sc["game"]}
+    if not todo:
+        return
+    for g in stored_games():
+        if g["id"] in todo:
+            todo[g["id"]]["game"]["players"] = _players(g)
+    S.save_study()
+
+
 async def start(gid: str) -> dict:
     """Open the game's review diagram; Stockfish starts on it unless it has run already."""
     if S.lock:
@@ -154,7 +178,8 @@ async def start(gid: str) -> dict:
             src = _game_source(gid)
             sc["title"] = _title(src)
             sc["game"] = {**sc["game"], "result": src["result"], "status": src["status"],
-                          "url": f"https://lichess.org/{gid}/{src['color']}", "opening": src.get("opening", "")}
+                          "url": f"https://lichess.org/{gid}/{src['color']}", "opening": src.get("opening", ""),
+                          "players": src["players"]}
     if sc is None:
         src = _game_source(gid)
         S.study["seq"] += 1
@@ -162,7 +187,8 @@ async def start(gid: str) -> dict:
                               comment="Stockfish разбирает партию…")
         scenes.add_moves(sc, sc["root"], src["moves"], by="game")
         sc["game"] = {"lichess": gid, "color": src["color"], "result": src["result"], "status": src["status"],
-                      "url": f"https://lichess.org/{gid}/{src['color']}", "opening": src.get("opening", "")}
+                      "url": f"https://lichess.org/{gid}/{src['color']}", "opening": src.get("opening", ""),
+                      "players": src["players"]}
         S.study["scenes"].append(sc)
         S.study["scenes"] = S.study["scenes"][-MAX_SCENES:]
     S.study["current"] = sc["id"]

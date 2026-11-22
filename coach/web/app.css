@@ -431,4 +431,9 @@ a.btn { text-decoration: none; display: inline-block; }
 .review p { margin: 0; }
 .review-head { display: flex; align-items: center; gap: 8px; }
 .review-actions { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.players { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--muted); }
+.players b { color: var(--ink); font-weight: 600; }
+.players .pc { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--muted); margin-right: 6px; vertical-align: -1px; }
+.players .pc.white { background: #fff; }
+.players .pc.black { background: #000; }
 .review-actions a, .review a { color: var(--accent); font-size: 12px; }
