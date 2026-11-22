@@ -2,7 +2,8 @@
 
 Each chat is a Claude Code session in the project folder, signed in with the user's own Claude Code
 login (no API key). It gets in-process tools for the board, Stockfish, the puzzle trainer and the
-background jobs; other Claude Code tools ask the user for permission in the chat.
+background jobs. Other Claude Code tools run in Claude Code's auto mode: a classifier approves safe calls
+by itself; only a call it would not approve on its own comes to the user as a permission card in the chat.
 Transcripts for display are kept in app/chats/<id>.json of the data folder (coach/config.py); the Claude session id lets a chat
 continue after the app restarts.
 """
@@ -475,7 +476,7 @@ class ChatManager:
             mcp_servers={"board": make_tools(chat.id)},
             allowed_tools=["mcp__board", "Read", "Glob", "Grep", "TodoWrite"],
             disallowed_tools=["AskUserQuestion", "mcp__chess-board", "ExitPlanMode", "EnterPlanMode"],
-            permission_mode="default",
+            permission_mode="auto",  # the user asked not to approve every command by hand (2026-11-22)
             can_use_tool=can_use_tool,
             include_partial_messages=True,
             stderr=lambda _line: None,
