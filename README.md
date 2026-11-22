@@ -63,3 +63,7 @@ claude mcp add --scope local chess-board -e PYTHONPATH=$PWD -- $PWD/.venv/bin/py
 - [python-chess](https://github.com/niklasf/python-chess) — правила и связь со Stockfish, GPL-3.0.
 - Фигуры Merida и доска brown — из [lila](https://github.com/lichess-org/lila), GPLv2+.
 - Звуки Lichess не входят в репозиторий (они несвободные) — их скачивает `scripts/fetch_sounds.sh`.
+
+## Лицензия
+
+[GPL-3.0](LICENSE): приложение построено на chessground и python-chess, которые распространяются под GPL-3.0.
