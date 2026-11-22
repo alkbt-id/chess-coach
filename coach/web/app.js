@@ -1994,7 +1994,18 @@ let closedChats = new Set();
 const saveClosed = () => http.send("PUT", "/api/settings", { closed_chats: [...closedChats] }).catch(() => {});
 const openChats = () => ch.list.filter((c) => !closedChats.has(c.id) || c.id === ch.cur);
 
+// The Mac window tells the Claude Limits menu bar app which chat is on screen, so its "waiting for you"
+// mark on that chat clears by itself, as for a VS Code window in front (no-op in a browser or on the iPad).
+let shownChat;
+function reportShownChat() {
+  const id = ch.open && !isLive() ? ch.cur || "" : "";
+  if (id === shownChat) return;
+  shownChat = id;
+  try { window.webkit?.messageHandlers?.shownChat?.postMessage(id); } catch {}
+}
+
 function renderChatTabs() {
+  reportShownChat();
   $("#chat-tabs").innerHTML = openChats().map((c) =>
     `<div class="ctab${c.id === ch.cur ? " on" : ""}" data-chat="${c.id}" title="${esc(c.title)}" role="tab">${c.busy ? '<span class="dot"></span>' : ""}<span class="ctitle">${esc(c.title)}</span><button type="button" class="cx" data-close="${c.id}" title="Закрыть вкладку">×</button></div>`).join("")
     + `<button type="button" class="ctab add" id="chat-new" title="Новый чат">＋</button>`
@@ -2195,6 +2206,7 @@ function setChatOpen(open) {
   $("#chat-toggle").classList.toggle("on", open);
   try { localStorage.setItem("chat.open", open ? "1" : "0"); } catch {}
   layout();
+  reportShownChat();
 }
 
 $("#chat-tabs").addEventListener("click", (e) => {
@@ -2856,6 +2868,7 @@ function applyLock() {
   }
   $("#layout").classList.toggle("no-chat", on || !ch.open);
   if (on !== was) { renderEvalBar(); layout(); }
+  reportShownChat();
 }
 
 // =====================================================================

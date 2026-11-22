@@ -12,7 +12,7 @@ let appURL = URL(string: "http://127.0.0.1:\(port)/")!
 let pingURL = URL(string: "http://127.0.0.1:\(port)/api/ping")!
 let logPath = NSHomeDirectory() + "/Library/Logs/chess-coach.log"
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var web: WKWebView!
     var server: Process?
@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         buildMenu()
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        config.userContentController.add(self, name: "shownChat")
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -162,6 +163,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { deliverPendingChat(loaded: true) }
+
+    // The chat on screen ("" for none), sent by the page: the window's AXDocument becomes that chat's
+    // chess-coach://chat link, the same link each chat's `claude` process gives Claude Limits
+    // (CLAUDE_LIMITS_OPEN_URL), so the menu bar app knows the chat is seen while this window is in front.
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "shownChat", let id = message.body as? String else { return }
+        let valid = id.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil
+        window.setAccessibilityDocument(valid ? "chess-coach://chat?id=\(id)" : nil)
+    }
+
+    // A new page reports its chat again once it starts.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { window.setAccessibilityDocument(nil) }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { ensureServer() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
