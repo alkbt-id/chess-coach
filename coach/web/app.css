@@ -316,6 +316,8 @@ cg-board square.hl { background: rgba(255, 190, 0, .5); }
 /* ⏮ ◀ ▶ ⏭ under the board, as wide as the board; on a touch screen (the iPad) big enough for a finger */
 .board-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .board-nav .icon { height: 32px; font-size: 14px; }
+/* drawn icons, not ⏮ ⏭ characters: the iPad shows those as colour emoji */
+.board-nav svg { display: block; width: 1.15em; height: 1.15em; margin: auto; fill: currentColor; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
 @media (any-pointer: coarse) {
   .board-nav { gap: 8px; }
   .board-nav .icon { height: 56px; font-size: 26px; border-radius: 10px; touch-action: manipulation; }
