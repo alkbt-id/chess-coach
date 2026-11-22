@@ -16,6 +16,10 @@
   memory. A card is a position where it is the user's move, keyed by colour and position (another move order
   reaches the same card); its answer is the main move there (the first of the user's moves). Cards are spaced
   like the puzzles: a right answer moves the card a step further (DRILL_STEPS), a wrong one brings it back soon.
+- The user's games against the trees: a game follows its tree move by move (another move order reaching a position
+  of the tree counts too) until someone leaves it — the user (a mistake to look at), the opponent (a reply the
+  repertoire still lacks) — or the tree runs out (the end of the preparation). A section lists its games so, and
+  a finished live game says it under the result (the window asks after the game, never during it).
 - While a live Lichess game is on (S.lock) the repertoire is closed: it is opening preparation.
 """
 
@@ -42,7 +46,7 @@ COLORS = ("white", "black")
 TREE = {"white": "rep-white", "black": "rep-black"}
 TITLE = {"white": "За белых", "black": "За чёрных"}
 MIN_GAMES = 3
-PLIES = 24  # how far a game is followed for sections and their statistics
+PLIES = 40  # how far a game is followed for sections, their statistics and the check against the trees
 IDLE = 15 * 60
 DRILL_STEPS = [10 * 60, 86400, 3 * 86400, 7 * 86400, 16 * 86400, 35 * 86400, 80 * 86400]  # seconds until a card is due again
 # families too wide to be one opening: their variation is the section («Queen's Pawn Game: Chigorin Variation»)
@@ -244,6 +248,73 @@ class Repertoire:
             out["trees"] = [self.trees[c] for c in COLORS]
         return out
 
+    # ---- the user's games against the trees ----
+    def positions(self, color: str) -> dict[str, dict]:
+        """Position key → node of a tree (main lines first): another move order reaches the same node."""
+        out: dict[str, dict] = {}
+        for n, _ in scenes.walk(self.trees[color]["root"]):
+            out.setdefault(" ".join(n["fen"].split()[:4]), n)
+        return out
+
+    def section_at(self, color: str, node_id: str) -> dict | None:
+        """The deepest section on the way to a node (the node itself included)."""
+        way = {n["id"]: i for i, n in enumerate(scenes.path_of(self.trees[color], node_id))}
+        on = [s for s in self.d["sections"] if s["color"] == color and s["node"] in way]
+        return max(on, key=lambda s: way[s["node"]], default=None)
+
+    def check_game(self, color: str, ucis: list[str], pos: dict | None = None) -> dict:
+        """How far a game from the initial position went along the tree of the user's colour: kind "user" / "opponent"
+        (who left it, with the move played and the tree's moves there), "end" (the tree had no more moves), "in" (it
+        never left). `node` is the last node of the tree the game reached."""
+        tree = self.trees[color]
+        pos = pos if pos is not None else self.positions(color)
+        node, b = tree["root"], chess.Board()
+        out: dict = {"kind": "in"}
+        skip = 0
+        for i, u in enumerate(ucis):
+            try:
+                mv = chess.Move.from_uci(u)
+            except ValueError:
+                break
+            if mv not in b.legal_moves:
+                break
+            num, san, mover = scenes.num_label(b), b.san(mv), "white" if b.turn == chess.WHITE else "black"
+            child = next((c for c in node["children"] if c["uci"] == u), None)
+            b.push(mv)
+            if skip:  # moves of another order that come back into the tree: the last one lands on a node
+                skip -= 1
+                if not skip:
+                    node = pos[openings.key(b)]
+                continue
+            child = child or pos.get(openings.key(b))
+            if child is None:
+                skip = _back_in(b, ucis[i + 1: i + 5], pos)
+                if skip:
+                    continue
+                out = {"kind": "end" if not node["children"] else "user" if mover == color else "opponent",
+                       "ply": i + 1, "num": num, "played": san, "uci": u, "expected": [c["san"] for c in node["children"]]}
+                break
+            node = child
+        sec = self.section_at(color, node["id"])
+        return {**out, "node": node["id"], "before": san_path(scenes.path_of(tree, node["id"])),
+                "section": sec["id"] if sec else None, "section_name": sec["name"] if sec else None}
+
+    def games_report(self, sec: dict, recent: int = 12) -> dict:
+        """A section's games against its tree: where the user and the opponents left it, where the preparation ended."""
+        color = sec["color"]
+        pos = self.positions(color)
+        rows, groups = [], {"user": {}, "opponent": {}, "end": {}}
+        for g in self.section_games(sec):
+            chk = self.check_game(color, g["ucis"], pos)
+            rows.append({**{k: g[k] for k in ("id", "date", "outcome", "opp", "oppRating", "url")}, "ucis": g["ucis"], "check": chk})
+            if chk["kind"] in groups:
+                key = (chk["node"], "" if chk["kind"] == "end" else chk["uci"])
+                grp = groups[chk["kind"]].setdefault(key, {k: chk.get(k) for k in ("node", "before", "num", "played", "uci", "expected")} | {"games": 0})
+                grp["games"] += 1
+        top = {k: sorted(v.values(), key=lambda x: -x["games"])[:6] for k, v in groups.items()}
+        counts = Counter(r["check"]["kind"] for r in rows)
+        return {"section": sec["id"], "games": len(rows), "counts": dict(counts), **top, "recent": rows[:recent]}
+
     # ---- the drill ----
     def drill_answer(self, key: str, ok: bool) -> dict:
         color, _, pos = key.partition(":")
@@ -418,6 +489,8 @@ leading to a section may come from the user's games. Lessons are chats bound to 
   one move per position (a second one is an alternative); on the opponent's side add every reply worth preparing.
 - `repertoire_edit` (promote, delete, comment, goto), `repertoire_section` (create, rename, retire, restore): only
   when the user asks. A section the user stopped playing is retired, never deleted.
+- `repertoire_state` also compares the user's games with a section's tree: where the user left it (worth a lesson),
+  which opponent replies the tree lacks, where the preparation ends.
 - The user drills the repertoire from memory in the app (the app plays the opponent's moves, the user their own);
   `repertoire_state` shows a section's drill results — positions they often miss are worth a lesson.
 - `repertoire_notes` is your memory between lessons (each chat is a separate session). The user does not see the
@@ -488,6 +561,7 @@ def tools(chat_id: str) -> list:
                 "games": REP.stats(sec, recent=12),
                 "user_moves_in_games": _first_moves(gl, node, tree),
                 "drill": REP.drill_summary(sec),
+                "games_vs_tree": _games_vs_tree(REP.games_report(sec)),
             }
         return out
 
@@ -585,6 +659,32 @@ def tools(chat_id: str) -> list:
     ]
 
 
+def _back_in(b: chess.Board, ucis: list[str], pos: dict) -> int:
+    """How many of the next moves bring the game back to a position of the tree (another move order), 0 if they don't."""
+    b = b.copy()
+    for k, u in enumerate(ucis, 1):
+        try:
+            b.push(chess.Move.from_uci(u))
+        except (ValueError, AssertionError):
+            return 0
+        if openings.key(b) in pos:
+            return k
+    return 0
+
+
+def _games_vs_tree(rep: dict) -> dict:
+    def line(x: dict, kind: str) -> str:
+        where = f"after {x['before']}" if x["before"] else "at the start"
+        if kind == "end":
+            return f"{where}: the tree ends ({x['games']} games)"
+        exp = f" instead of {' / '.join(x['expected'])}" if kind == "user" and x["expected"] else ""
+        return f"{where}: {x['num']}{x['played']}{exp} ({x['games']} games)"
+    return {"games": rep["games"], "counts": rep["counts"],
+            "user_left_the_tree": [line(x, "user") for x in rep["user"]],
+            "opponents_left_the_tree": [line(x, "opponent") for x in rep["opponent"]],
+            "preparation_ended": [line(x, "end") for x in rep["end"]]}
+
+
 def _first_moves(gl: list[dict], node: dict, tree: dict) -> list[str]:
     """What the user and the opponents played from the section's position in the games that reached it."""
     k = openings.key(chess.Board(node["fen"]))
@@ -676,6 +776,19 @@ async def http_drill(b: dict):
 
 
 @route
+async def http_games(b: dict):
+    return REP.games_report(REP.section(b.get("section")))
+
+
+@route
+async def http_check(b: dict):
+    color = b.get("color")
+    if color not in COLORS:
+        raise SceneError("color must be white or black")
+    return REP.check_game(color, [str(u) for u in b.get("moves") or []])
+
+
+@route
 async def http_seed(_: dict):
     n = REP.seed()
     await broadcast({"type": "scene", "scene": REP.trees["white"], "goto": None})
@@ -690,4 +803,6 @@ ROUTES = [
     Route("/api/rep/lesson", http_lesson, methods=["POST"]),
     Route("/api/rep/seed", http_seed, methods=["POST"]),
     Route("/api/rep/drill", http_drill, methods=["POST"]),
+    Route("/api/rep/games", http_games, methods=["POST"]),
+    Route("/api/rep/check", http_check, methods=["POST"]),
 ]

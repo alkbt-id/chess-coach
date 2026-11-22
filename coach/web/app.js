@@ -536,6 +536,12 @@ $("#preview").addEventListener("click", async (e) => {
     const upto = preview.plies.slice(0, Math.max(preview.idx + 1, 1));
     const sc = scene();
     closePreviewSilently();
+    if (rep.on && sc?.rep) { // the repertoire keeps only moves chosen with «Записать в репертуар»: the line is tried first
+      study.node = at.id;
+      rep.trial = { scene: sc.id, base: at.id, ucis: upto.map((p) => p.uci) };
+      renderStudy();
+      return;
+    }
     try {
       const r = await post("/api/scene/add", { scene: sc.id, at: at.id, moves: upto.map((p) => p.uci), goto: "end" });
       study.node = r.last.node;
@@ -946,7 +952,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
-const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null };
+const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {} };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
 
 const idxCache = new WeakMap();
@@ -2825,7 +2831,7 @@ function playStatusHtml(g, ply) {
     const r = playResult(g);
     const counted = g.rated && g.ratingDiff != null && g.status !== "aborted" && g.status !== "noStart";
     const d = counted ? ` Рейтинг: ${g.ratingDiff >= 0 ? "+" : ""}${g.ratingDiff}.` : "";
-    return `<div class="result ${r.cls}"><h3>${esc(r.head)}</h3>${r.why || d ? `<p>${esc(r.why ? r.why[0].toUpperCase() + r.why.slice(1) + "." : "")}${esc(d)}</p>` : ""}</div>`;
+    return `<div class="result ${r.cls}"><h3>${esc(r.head)}</h3>${r.why || d ? `<p>${esc(r.why ? r.why[0].toUpperCase() + r.why.slice(1) + "." : "")}${esc(d)}</p>` : ""}</div>${repAfterGameHtml(g)}`;
   }
   if (!g.boardOk) {
     return `<div class="result info"><h3>Партия идёт на lichess.org</h3>
@@ -3306,6 +3312,7 @@ function repSectionHtml(s) {
     ${kids.length ? `<div class="rep-chips"><span class="bt-label">Внутри:</span>${kids.map((k) => `<button type="button" class="rchip" data-sec="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div>` : ""}
     <div class="rep-chips"><span class="bt-label">Уроки:</span>${lessonChips}<button type="button" class="rchip add" id="rep-lesson-new">＋ Новый урок</button></div>
     ${repDrillButton({ section: s.id }, "drill-sec")}
+    ${repGamesHtml(s)}
     <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."} Увидеть его — попроси в чате «покажи конспект».</p>`;
   const boards = inLesson ? boardsOf(ch.cur) : [];
   const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски раздела"><button type="button" class="btab${onTree ? " on" : ""}" data-rep-tree>Дерево репертуара</button>
@@ -3638,6 +3645,116 @@ function repDrillHtml() {
     <p class="hint">Программа ходит за соперника по дереву репертуара, а ты по памяти отвечаешь там, где пора повторить; ходы, которые ты уже помнишь, она делает сама. Верный ответ вернёт позицию через день, потом всё реже; ошибка — через 10 минут и ещё раз в этой тренировке.</p>`;
 }
 
+// ---- the user's games against the tree (coach/repertoire.py check_game): where they or the opponent left it ----
+// rep.games: the open section's report {section, data | loading | error}, fetched when the section shows and again
+// after the tree or the games change; rep.after: the check of finished live games, by game id.
+const RG_RESULT = { win: "победа", loss: "поражение", draw: "ничья" };
+const rgGames = (k) => `${k} ${plural(k, "партия", "партии", "партий")}`;
+
+function repLoadGames(sid) {
+  if (rep.games?.section === sid) return;
+  rep.games = { section: sid, loading: true };
+  post("/api/rep/games", { section: sid })
+    .then((data) => { if (rep.games?.section !== sid) return; rep.games = { section: sid, data }; if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); })
+    .catch((err) => { if (rep.games?.section === sid) rep.games = { section: sid, error: String(err.message) }; });
+}
+
+function rgCheckText(k) {
+  if (k.kind === "user") return `ты ушёл: ${k.num}${k.played}`;
+  if (k.kind === "opponent") return `соперник ушёл: ${k.num}${k.played}`;
+  return k.kind === "end" ? "по дереву до конца подготовки" : "вся партия по дереву";
+}
+
+function repGamesHtml(s) {
+  if (rep.games?.section !== s.id) repLoadGames(s.id);
+  const d = rep.games?.data;
+  if (!d) return rep.games?.error ? `<p class="hint">Партии не сверились: ${esc(rep.games.error)}</p>` : `<p class="hint">Сверяю твои партии с деревом…</p>`;
+  if (!d.games) return "";
+  const c = d.counts || {};
+  const row = (x, kind, i) => {
+    const num = x.before && x.num.endsWith("…") ? "" : x.num; // a reply right after its move needs no number
+    const move = kind === "end" ? `после ${esc(x.before)}` : `${x.before ? `${esc(x.before)} ` : ""}<b>${esc(num)}${esc(x.played)}</b>`;
+    const exp = kind === "user" && x.expected?.length ? ` <span class="rg-exp">вместо ${esc(x.expected[0])}</span>` : "";
+    return `<div class="rg-row ${kind}"><span class="rep-path">${move}${exp}</span><span class="rg-n">${rgGames(x.games)}</span>
+      <span class="rg-act"><button type="button" class="link-btn" data-rg-goto="${esc(x.node)}">показать</button>${kind === "opponent"
+        ? `<button type="button" class="link-btn" data-rg-add="${i}">добавить в дерево</button>` : ""}<button type="button" class="link-btn" data-rg-ask="${kind}" data-i="${i}">спросить Claude</button></span></div>`;
+  };
+  const group = (kind, title) => (d[kind]?.length ? `<h3>${title}</h3>${d[kind].map((x, i) => row(x, kind, i)).join("")}` : "");
+  const recent = d.recent.map((g, i) => `<button type="button" class="rg-game" data-rg-game="${i}" title="Показать партию на доске">
+      <span>${new Date(g.date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })} · ${esc(g.opp)}${g.oppRating ? ` (${g.oppRating})` : ""}</span>
+      <span class="res ${g.outcome}">${RG_RESULT[g.outcome] || ""}</span><span class="rg-chk ${g.check.kind}">${esc(rgCheckText(g.check))}</span></button>`).join("");
+  return `<details class="rep-games"${rep.gamesOpen ? " open" : ""}><summary>Партии в этом дебюте: ${d.games} · ты уходил из дерева ${c.user || 0} · соперник ${c.opponent || 0}</summary>
+    <p class="hint">Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход — ошибка против репертуара; ход соперника — ответ, который стоит подготовить.</p>
+    ${group("user", "Где ты уходишь из дерева")}${group("opponent", "Ходы соперников, на которые в дереве нет ответа")}${group("end", "Где кончается подготовка")}
+    <h3>Последние партии</h3><div class="rg-games">${recent}</div></details>`;
+}
+
+// a finished live game said against the repertoire (asked after the game, never during it)
+function repAfterGameHtml(g) {
+  try { return repAfterGame(g); } catch { return ""; } // never in the way of the game's result
+}
+function repAfterGame(g) {
+  if (!g || g.playing || !g.color || g.moves.length < 2 || g.startFen !== START_FEN || !repTree(g.color)) return "";
+  const a = rep.after[g.id];
+  if (!a) {
+    rep.after[g.id] = { loading: true };
+    post("/api/rep/check", { color: g.color, moves: g.moves.map((m) => m.uci) })
+      .then((r) => { rep.after[g.id] = r; if (mode === "play") renderPlayPanel(); })
+      .catch(() => { rep.after[g.id] = { error: true }; });
+    return "";
+  }
+  if (!a.kind) return "";
+  const where = a.before ? `после ${esc(a.before)}` : "в начальной позиции";
+  const text = a.kind === "user" ? `${where} ты сыграл ${esc(a.num)}${esc(a.played)}, а в твоём репертуаре ${esc(a.expected[0])}`
+    : a.kind === "opponent" ? `${where} соперник сыграл ${esc(a.num)}${esc(a.played)} — на этот ход в репертуаре ответа нет`
+      : a.kind === "end" ? `партия шла по репертуару до конца подготовки — ${where}` : "вся партия прошла по репертуару";
+  return `<div class="rep-after ${a.kind}"><b>Репертуар${a.section_name ? ` · ${esc(a.section_name)}` : ""}:</b> ${text}.
+    <button type="button" class="link-btn" id="rep-after-show" data-color="${g.color}" data-node="${esc(a.node)}" data-section="${esc(a.section || "")}">показать в репертуаре</button></div>`;
+}
+
+$("#panel").addEventListener("click", (e) => {
+  const t = e.target.closest("#rep-after-show");
+  if (!t || mode !== "play" || isLive()) return;
+  rep.section = t.dataset.section || null;
+  repRemember();
+  rep.games = null;
+  study.id = repTree(t.dataset.color)?.id ?? null;
+  study.node = t.dataset.node;
+  setMode("rep");
+});
+$("#panel").addEventListener("toggle", (e) => { if (e.target.classList?.contains("rep-games")) rep.gamesOpen = e.target.open; }, true);
+
+async function repGamesClick(t) {
+  const s = repSec();
+  const d = rep.games?.data;
+  const tree = s && repTree(s.color);
+  if (!s || !d || !tree) return;
+  const show = (node) => { closePreviewSilently(); study.id = tree.id; study.node = node; renderStudy(); };
+  if (t.dataset.rgGoto) show(t.dataset.rgGoto);
+  else if (t.dataset.rgAdd) {
+    const x = d.opponent[Number(t.dataset.rgAdd)];
+    const r = await post("/api/scene/add", { scene: tree.id, at: x.node, moves: [x.uci], goto: "end" });
+    show(r.last.node);
+    setStatus("Ход соперника записан. Сыграй на доске свой ответ и нажми «Записать в репертуар» — или спроси Claude.");
+    setTimeout(() => setStatus(""), 7000);
+  } else if (t.dataset.rgAsk) {
+    const x = d[t.dataset.rgAsk][Number(t.dataset.i)];
+    const where = x.before ? `после ${x.before}` : "в начальной позиции";
+    const text = t.dataset.rgAsk === "user"
+      ? `В ${x.games} ${plural(x.games, "партии", "партиях", "партиях")} ${where} я играл ${x.num}${x.played}, а в моём репертуаре ${x.expected[0]}. Покажи, чем ${x.expected[0]} лучше и чем плох мой ход.`
+      : t.dataset.rgAsk === "opponent"
+        ? `В моих партиях соперники ${where} играют ${x.num}${x.played} (${rgGames(x.games)}), а в репертуаре ответа на это нет. Что мне здесь играть?`
+        : `Моя подготовка кончается ${where} (${rgGames(x.games)}). Как играть дальше в этой позиции?`;
+    show(x.node);
+    setChatOpen(true);
+    askClaude(text);
+  } else if (t.dataset.rgGame) {
+    const g = d.recent[Number(t.dataset.rgGame)];
+    const line = playLine(START_FEN, g.ucis);
+    openPreview(line, Math.max(0, Math.min((g.check.ply || line.plies.length) - 1, line.plies.length - 1)), `Партия с ${g.opp}`);
+  }
+}
+
 // ---- moving around ----
 function repRemember() { try { localStorage.setItem("rep.section", rep.section || ""); } catch {} }
 
@@ -3735,6 +3852,7 @@ async function repNewSection(color, at, name = "") {
 // a repertoire tree changed: Claude of the open chat wrote into it (shown, in «Репертуар»), or another window did
 function onRepScene(ev) {
   upsertScene(ev.scene);
+  rep.games = null; // the tree changed: the games are compared again
   if (isLive()) return;
   if (ev.goto && ev.by_chat && ev.by_chat === ch.cur) {
     closePreviewSilently();
@@ -3753,7 +3871,7 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game]");
   if (!t) return;
   const s = repSec();
   try {
@@ -3790,6 +3908,7 @@ $("#panel").addEventListener("click", async (e) => {
     else if (t.id === "rep-trial-save") await repTrialSave(false);
     else if (t.id === "rep-trial-section") await repTrialSave(true);
     else if (t.id === "rep-trial-drop") { rep.trial = null; renderStudy(); }
+    else if (t.dataset.rgGoto || t.dataset.rgAdd || t.dataset.rgAsk || t.dataset.rgGame) await repGamesClick(t);
     else if (t.id === "drill-sec" && s) drillStart({ section: s.id }, !!t.dataset.practice);
     else if (t.id === "drill-all") drillStart({}, !!t.dataset.practice);
     else if (t.id === "drill-again" && rep.drill) drillStart(rep.drill.scope, true);
@@ -3993,6 +4112,7 @@ async function onEvent(ev) {
       renderJobChip();
       renderJobsPop();
       if (ev.job.kind === "fetch_games" && ev.job.status !== "running" && play.hist) { play.hist = null; renderPlayPanel(); } // new games in the list
+      if (ev.job.kind === "fetch_games" && ev.job.status === "done") { rep.games = null; if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); }
       break;
     }
     case "play": { // test hook: a move as if the user made it
