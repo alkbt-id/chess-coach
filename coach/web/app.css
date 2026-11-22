@@ -545,3 +545,12 @@ a.btn { text-decoration: none; display: inline-block; }
 .rep-after.opponent { border-color: var(--accent); }
 .rep-after.end, .rep-after.in { border-color: var(--good); }
 .rg-row.habit b, .rg-chk.habit { color: var(--muted); }
+.mvl.rl-hl { color: var(--bad); }
+.rg-row.opponent .mvl.rl-hl { color: var(--accent); }
+.rg-row.habit .mvl.rl-hl { color: var(--muted); }
+.rchip-wrap { display: inline-flex; align-items: stretch; }
+.rchip-wrap .rchip { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0; }
+.rchip-x { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 0 999px 999px 0; padding: 0 8px; cursor: pointer; font-size: 12px; }
+.rchip-wrap.on .rchip-x { border-color: var(--accent); background: var(--accent-soft); }
+.rchip-x:hover { color: var(--bad); }
+.rchip-x.confirm { color: var(--bad); font-weight: 600; }

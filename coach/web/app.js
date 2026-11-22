@@ -1071,7 +1071,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
-const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {} };
+const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
 
 const idxCache = new WeakMap();
@@ -3374,6 +3374,16 @@ function repAgo(ts) {
   if (min < 24 * 60) return `${Math.round(min / 60)} ч назад`;
   return new Date(ts * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
 }
+// moves of the repertoire in text as an exact line from the start: a small board on hover and the line on the
+// board on a click, like moves anywhere in the app; `from` hides the moves before it, `bold` marks one
+function repLineHtml(ucis, { from = 0, bold = -1 } = {}) {
+  const line = playLine(START_FEN, ucis);
+  if (line.plies.length <= from) return "";
+  const key = regLine(line);
+  return `<span class="mseq" data-line="${key}">${line.plies.map((p, i) => (i < from ? "" : `${p.num.endsWith(".") || i === from ? p.num : ""}<b class="mvl${i === bold ? " rl-hl" : ""}" data-i="${i}">${esc(p.san)}</b>`)).filter(Boolean).join(" ")}</span>`;
+}
+const repWay = (tree, nodeId) => (tree && tindex(tree).get(nodeId) ? pathTo(tree, nodeId).map((n) => n.uci) : []);
+
 function repDepth(s) {
   let d = 0;
   for (let p = repSec(s.parent); p && d < 8; p = repSec(p.parent)) d++;
@@ -3410,7 +3420,7 @@ function repDrillButton(scope, id) {
 
 function repTocHtml() {
   const row = (s) => `<button type="button" class="rep-row${s.status === "retired" ? " retired" : ""}" data-sec="${esc(s.id)}" style="--d:${repDepth(s)}">
-      <span class="rn">${esc(s.name)}</span><span class="rp">${esc(s.path)}</span>${repScoreHtml(s)}${s.lessons?.length ? `<span class="rl">${s.lessons.length} ${plural(s.lessons.length, "урок", "урока", "уроков")}</span>` : ""}</button>`;
+      <span class="rn">${esc(s.name)}</span><span class="rp">${repLineHtml(repWay(repTree(s.color), s.node)) || esc(s.path)}</span>${repScoreHtml(s)}${s.lessons?.length ? `<span class="rl">${s.lessons.length} ${plural(s.lessons.length, "урок", "урока", "уроков")}</span>` : ""}</button>`;
   const group = (color) => {
     const list = rep.data.sections.filter((s) => s.color === color && s.status !== "retired");
     return `<section class="rep-group"><h2>${REP_SIDE[color]}</h2>${list.map(row).join("") || `<p class="hint">Разделов пока нет.</p>`}</section>`;
@@ -3452,13 +3462,14 @@ function repSectionHtml(s) {
   const kids = rep.data.sections.filter((x) => x.parent === s.id);
   const lessons = lessonsOf(s.id);
   const inLesson = lessonSection(ch.cur) === s.id;
-  const way = onTree && node ? pathTo(tree, node.id).map((n, i) => inlineMove(n, study.node, i === 0)).join("") : esc(s.path);
+  const way = onTree && node ? pathTo(tree, node.id).map((n, i) => inlineMove(n, study.node, i === 0)).join("") : repLineHtml(repWay(tree, s.node)) || esc(s.path);
   const crumbs = `<div class="rep-crumbs"><button type="button" class="link-btn" data-rep-toc>← Оглавление</button>
       <span>${REP_SIDE[s.color]}${parent ? ` › <button type="button" class="link-btn" data-sec="${esc(parent.id)}">${esc(parent.name)}</button>` : ""}</span></div>`;
   const title = rep.rename
     ? `<form id="rep-rename" class="newpos"><input id="rep-rename-input" value="${esc(s.name)}" autocomplete="off"><button class="btn small primary" type="submit">Сохранить</button></form>`
     : `<h1 class="title">${esc(s.name)}${s.status === "retired" ? ` <span class="rtag">не играю</span>` : ""}</h1>`;
-  const lessonChips = lessons.map((c, i) => `<button type="button" class="rchip${c.id === ch.cur ? " on" : ""}" data-lesson="${esc(c.id)}" title="${esc(c.title)}">${c.busy ? '<span class="dot"></span>' : ""}${esc(c.title === "Новый чат" ? `Урок ${lessons.length - i}` : c.title)}</button>`).join("");
+  // a lesson's × deletes it (its chat) on a second click; its boards stay in «Разбор», the notes keep what it taught
+  const lessonChips = lessons.map((c, i) => `<span class="rchip-wrap${c.id === ch.cur ? " on" : ""}"><button type="button" class="rchip${c.id === ch.cur ? " on" : ""}" data-lesson="${esc(c.id)}" title="${esc(c.title)}">${c.busy ? '<span class="dot"></span>' : ""}${esc(c.title === "Новый чат" ? `Урок ${lessons.length - i}` : c.title)}</button><button type="button" class="rchip-x${rep.delLesson === c.id ? " confirm" : ""}" data-lesson-del="${esc(c.id)}" title="Удалить урок">${rep.delLesson === c.id ? "удалить?" : "×"}</button></span>`).join("");
   const head = `${crumbs}${title}
     <div class="rep-meta"><span class="rep-path">${way}</span>${repScoreHtml(s)}</div>
     ${kids.length ? `<div class="rep-chips"><span class="bt-label">Внутри:</span>${kids.map((k) => `<button type="button" class="rchip" data-sec="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div>` : ""}
@@ -3542,7 +3553,8 @@ function repTrialStep(dir) {
 function repTrialHtml(toc) {
   const tr = repTrial();
   if (!tr) return "";
-  const moves = tr.plies.map((p, i) => `${p.num.endsWith(".") || i === 0 ? `<span class="num">${esc(p.num)}</span>` : ""}${esc(p.san)}`).join(" ");
+  const way = repWay(scene(), tr.base.id);
+  const moves = repLineHtml([...way, ...tr.plies.map((p) => p.uci)], { from: way.length });
   return `<div class="rep-trial"><div><b>Пробный вариант</b> — ещё не в репертуаре: <span class="rep-path">${moves}</span></div>
     <div class="actions">${toc ? `<button type="button" class="btn small primary" id="rep-trial-section">Сделать разделом</button>` : ""}
       <button type="button" class="btn small${toc ? "" : " primary"}" id="rep-trial-save">Записать в репертуар</button>
@@ -3823,10 +3835,12 @@ function repGamesHtml(s) {
   if (!d) return rep.games?.error ? `<p class="hint">Партии не сверились: ${esc(rep.games.error)}</p>` : `<p class="hint">Сверяю твои партии с деревом…</p>`;
   if (!d.games) return "";
   const c = d.counts || {};
+  const tree = repTree(s.color);
   const row = (x, kind, i) => {
-    const num = x.before && x.num.endsWith("…") ? "" : x.num; // a reply right after its move needs no number
-    const move = kind === "end" ? `после ${esc(x.before)}` : `${x.before ? `${esc(x.before)} ` : ""}<b>${esc(num)}${esc(x.played)}</b>`;
-    const exp = (kind === "user" || kind === "habit") && x.expected?.length ? ` <span class="rg-exp">вместо ${esc(x.expected[0])}</span>` : "";
+    const way = repWay(tree, x.node);
+    const move = kind === "end" ? `после ${repLineHtml(way) || esc(x.before)}` : repLineHtml([...way, x.uci], { bold: way.length });
+    const want = tree && tindex(tree).get(x.node)?.n.children.find((c) => c.san === x.expected?.[0]);
+    const exp = (kind === "user" || kind === "habit") && want ? ` <span class="rg-exp">вместо ${repLineHtml([...way, want.uci], { from: way.length })}</span>` : "";
     return `<div class="rg-row ${kind}"><span class="rep-path">${move}${exp}</span><span class="rg-n">${rgGames(x.games)}</span>
       <span class="rg-act"><button type="button" class="link-btn" data-rg-goto="${esc(x.node)}">показать</button>${kind === "opponent"
         ? `<button type="button" class="link-btn" data-rg-add="${i}">добавить в дерево</button>` : ""}<button type="button" class="link-btn" data-rg-ask="${kind}" data-i="${i}">спросить Claude</button></span></div>`;
@@ -3856,9 +3870,13 @@ function repAfterGame(g) {
     return "";
   }
   if (!a.kind) return "";
-  const where = a.before ? `после ${esc(a.before)}` : "в начальной позиции";
-  const text = a.kind === "user" ? `${where} ты сыграл ${esc(a.num)}${esc(a.played)}, а в твоём репертуаре ${esc(a.expected[0])}`
-    : a.kind === "opponent" ? `${where} соперник сыграл ${esc(a.num)}${esc(a.played)} — на этот ход в репертуаре ответа нет`
+  const ucis = g.moves.map((m) => m.uci);
+  const at = a.ply ? a.ply - 1 : ucis.length; // the move that left the tree
+  const where = at ? `после ${repLineHtml(ucis.slice(0, at))}` : "в начальной позиции";
+  const played = a.ply ? repLineHtml(ucis.slice(0, a.ply), { from: at }) : "";
+  const want = repTree(g.color) && tindex(repTree(g.color)).get(a.node)?.n.children.find((c) => c.san === a.expected?.[0]);
+  const text = a.kind === "user" ? `${where} ты сыграл ${played}, а в твоём репертуаре ${want ? repLineHtml([...ucis.slice(0, at), want.uci], { from: at }) : esc(a.expected[0])}`
+    : a.kind === "opponent" ? `${where} соперник сыграл ${played} — на этот ход в репертуаре ответа нет`
       : a.kind === "end" ? `партия шла по репертуару до конца подготовки — ${where}` : "вся партия прошла по репертуару";
   return `<div class="rep-after ${a.kind}"><b>Репертуар${a.section_name ? ` · ${esc(a.section_name)}` : ""}:</b> ${text}.
     <button type="button" class="link-btn" id="rep-after-show" data-color="${g.color}" data-node="${esc(a.node)}" data-section="${esc(a.section || "")}">показать в репертуаре</button></div>`;
@@ -3976,6 +3994,24 @@ function repFollowChat() {
   renderStudy();
 }
 
+// deleting a lesson = deleting its chat (the server drops the lesson with it); a second click within 3 s confirms
+async function repDeleteLesson(id) {
+  if (rep.delLesson !== id) {
+    rep.delLesson = id;
+    renderStudyPanel();
+    setTimeout(() => { if (rep.delLesson === id) { rep.delLesson = null; if (rep.on && mode === "study") renderStudyPanel(); } }, 3000);
+    return;
+  }
+  rep.delLesson = null;
+  const sid = lessonSection(id);
+  await post(`/api/chat/${id}/delete`);
+  ch.entries.delete(id);
+  ch.list = ch.list.filter((c) => c.id !== id);
+  delete rep.data.lessons[id];
+  if (ch.cur === id) openChat(lessonsOf(sid)[0]?.id ?? null, { follow: false }); else renderChatTabs();
+  renderStudy();
+}
+
 async function newLesson() {
   const s = repSec();
   const c = curChat();
@@ -4025,13 +4061,15 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game]");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del]");
   if (!t) return;
+  if (t.dataset.sec && e.target.closest(".mvl")) e.stopPropagation(); // the row opens its section; its moves only show on hover
   const s = repSec();
   try {
     if (t.dataset.sec) repOpen(t.dataset.sec);
     else if (t.dataset.repToc !== undefined) repToc();
     else if (t.dataset.lesson) openChat(t.dataset.lesson);
+    else if (t.dataset.lessonDel) await repDeleteLesson(t.dataset.lessonDel);
     else if (t.dataset.repTree !== undefined && s) {
       closePreviewSilently();
       study.id = repTree(s.color)?.id ?? null;
