@@ -897,11 +897,37 @@ function highlightMoves() {
   const onLine = boardLineKeys();
   for (const seq of $$(".mseq")) {
     const line = seqLine(seq);
-    $$(".mvl", seq).forEach((t, i) => {
+    const flags = $$(".mvl", seq).map((t, i) => {
       const k = line?.plies?.[i] ? fenKey(line.plies[i].fen) : null;
       t.classList.toggle("on", !!k && k === key);
-      t.classList.toggle("path", !!k && k !== key && onLine.has(k));
+      return !!k && (k === key || onLine.has(k));
     });
+    frameRuns(seq, flags);
+  }
+}
+
+// One frame around each run of moves in a row of text that are on the board's line. The frame is a span put around
+// the run; the DOM changes only when the runs change, so the next pass after it (the observer below) does nothing.
+function frameRuns(seq, flags) {
+  const sig = flags.map(Number).join("");
+  if ((seq.dataset.runs ?? flags.map(() => 0).join("")) === sig) return;
+  seq.dataset.runs = sig;
+  for (const r of $$(":scope > .lrun", seq)) r.replaceWith(...r.childNodes);
+  const moves = $$(".mvl", seq);
+  for (let i = 0; i < moves.length; i++) {
+    if (!flags[i]) continue;
+    let j = i;
+    while (flags[j + 1]) j++;
+    const range = document.createRange();
+    range.setStartBefore(moves[i]);
+    range.setEndAfter(moves[j]);
+    const prev = moves[i].previousSibling; // "25." written before the move (lines from explanations) goes in too
+    const num = prev?.nodeType === Node.TEXT_NODE ? prev.data.match(/\d+(?:\.\.\.|…|\.)$/) : null;
+    if (num) range.setStart(prev, num.index);
+    const box = document.createElement("span");
+    box.className = "lrun";
+    range.surroundContents(box);
+    i = j;
   }
 }
 

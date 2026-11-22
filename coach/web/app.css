@@ -135,7 +135,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .mvl { font-family: var(--font-mono); font-weight: 600; font-size: .95em; color: var(--accent); cursor: pointer; border-radius: 3px; padding: 0 1px; }
 .mvl:hover { background: var(--accent-soft); }
 .mvl.on { background: var(--accent-bg); color: var(--accent-ink); }
-.mvl.path { box-shadow: inset 0 0 0 1px var(--accent); } /* a move of the line on the board, mentioned elsewhere in text */
+/* moves of the line on the board, one frame per run in a row of text. A row of moves always keeps a little room around
+   it and between its moves; the frame's border and padding are taken back by its margin, so text never shifts. */
+.mseq { margin: 0 2px; word-spacing: 3px; }
+.lrun { border: 1px solid var(--accent); border-radius: 5px; padding: 1px 2px; margin: 0 -3px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .mvl.miss { color: var(--bad); text-decoration: line-through; }
 
 /* ---------- preview of a line clicked in text ---------- */
