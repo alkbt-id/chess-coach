@@ -1191,7 +1191,8 @@ const glyphHtml = (n) => (n.glyph ? `<span class="g ${GLYPH_CLASS[n.glyph] || ""
 const labelHtml = (n) => (n.label ? `<span class="lbl">${esc(n.label)}</span>` : "");
 function idxCell(num) { return `<span class="ix">${esc(num.replace(/[.…]$/, ""))}</span>`; }
 // The tree's moves on the line of the current move: from the start to it and on along the main line (where → goes).
-// They get a frame, as in text, so the way to the current move stands out among the branches (set while a tree renders).
+// In the branches' rows they get a frame, one per run as in text, so the way to the current move stands out; the main
+// line's table gets none, it is one line anyway (set while a tree renders).
 let treeLine = null;
 function lineIds(root, cur) {
   const ids = new Set();
@@ -1206,13 +1207,38 @@ function lineIds(root, cur) {
   if (rep.trial?.base !== cur) for (let n = at.children[0]; n; n = n.children[0]) ids.add(n.id); // a tried line goes elsewhere
   return ids;
 }
-const pathCls = (n) => (treeLine?.has(n.id) ? " path" : "");
 function treeMove(n, cur) {
-  return `<span class="tm${n.id === cur ? " active" : pathCls(n)}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
+  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
+}
+function moveHtml(n, cur, force) { // the number (when due) and the move
+  const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
+  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>`;
 }
 function inlineMove(n, cur, force) {
-  const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
-  return `${num}<span class="vm${n.id === cur ? " active" : pathCls(n)}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)}${askHtml(n)} `;
+  return `${moveHtml(n, cur, force)}${labelHtml(n)}${askHtml(n)} `;
+}
+// A branch's row written piece by piece, with a frame around each run of moves of the line (treeLine): a title, a
+// comment, a side line or branches end the run. `space`: the row goes on after a move written before it; `lead`:
+// that move's run is open, and the row's first moves, if they are on the line too, go on in the same frame.
+function rowHtml(cur, { space = false, lead = false } = {}) {
+  let h = "", open = false;
+  const sp = () => { if (space) h += " "; space = false; };
+  const close = () => { if (open) h += "</span>"; open = false; };
+  return {
+    move(n, force) {
+      const on = n.id === cur || !!treeLine?.has(n.id);
+      if (on && lead && !h) { h += '<span class="lrun cont-l">'; open = true; }
+      else if (!(on && open)) { close(); sp(); if (on) { h += '<span class="lrun">'; open = true; } }
+      sp();
+      h += moveHtml(n, cur, force);
+      const after = labelHtml(n) + askHtml(n);
+      if (after) { close(); h += after; }
+      space = true;
+    },
+    add(html, spaceAfter = false) { close(); sp(); h += html; space = spaceAfter; },
+    get open() { return open; },
+    end(trailing = true) { close(); if (trailing) sp(); return h; },
+  };
 }
 // «Спросить Claude» right after the user's move on screen, where the played line is (set only while the board's tree renders)
 let askAt = null;
@@ -1272,8 +1298,13 @@ function plainLine(n, max = 8) {
   return true;
 }
 function lineHtml(n, cur) {
-  const head = inlineMove(n, cur, true);
-  const body = seqHtml(n, cur, true);
+  const first = rowHtml(cur);
+  first.move(n, true);
+  const lead = first.open;
+  const body = seqHtml(n, cur, true, lead);
+  let head = first.end(false);
+  // the first move stays outside the row's body (a folded branch shows only it): its frame and the body's join up
+  if (lead && body.startsWith('<span class="lrun cont-l">')) head = head.replace('class="lrun"', 'class="lrun cont-r"');
   if (!body.trim()) return `<div class="line">${head}</div>`;
   let folded = !!fold?.set.has(n.id);
   if (folded && fold.moved && hasNode(n, cur)) { fold.set.delete(n.id); fold.dirty = true; folded = false; }
@@ -1286,21 +1317,23 @@ function lineHtml(n, cur) {
 function linesHtml(nodes, cur) {
   return `<div class="lines">${nodes.map((n) => lineHtml(n, cur)).join("")}</div>`;
 }
-// the moves from `first` on; with `rest`, everything after the first move (its comment included)
-function seqHtml(first, cur, rest = false) {
-  let h = (rest ? "" : inlineMove(first, cur, true)) + commentHtml(first, cur);
+// the moves from `first` on; with `rest`, everything after the first move (its comment included); `lead`: see rowHtml
+function seqHtml(first, cur, rest = false, lead = false) {
+  const row = rowHtml(cur, { space: rest, lead });
+  if (!rest) row.move(first, true);
+  if (first.comment) row.add(commentHtml(first, cur));
   let n = first;
   let force = !!first.comment;
   while (n.children.length) {
     const [main, ...alts] = n.children;
-    if (alts.length > 1 || (alts.length && !plainLine(alts[0]))) return h + linesHtml(n.children, cur);
-    h += inlineMove(main, cur, force);
+    if (alts.length > 1 || (alts.length && !plainLine(alts[0]))) { row.add(linesHtml(n.children, cur)); return row.end(); }
+    row.move(main, force);
     force = false;
-    if (main.comment) { h += commentHtml(main, cur); force = true; }
-    if (alts.length) { h += `<span class="paren">(${seqHtml(alts[0], cur)})</span> `; force = true; }
+    if (main.comment) { row.add(commentHtml(main, cur)); force = true; }
+    if (alts.length) { row.add(`<span class="paren">(${seqHtml(alts[0], cur)})</span>`, true); force = true; }
     n = main;
   }
-  return h;
+  return row.end();
 }
 function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
