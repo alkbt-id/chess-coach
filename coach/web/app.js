@@ -426,7 +426,10 @@ function glyphShape(node) {
 function renderBoard() {
   if (preview) {
     const p = preview.idx >= 0 ? preview.plies[preview.idx] : null;
-    setBoard({ fen: p ? p.fen : preview.start, orientation: boardOrientation(), lastMove: p ? sq(p.uci) : undefined });
+    const fen = p ? p.fen : preview.start;
+    setBoard({ fen, orientation: boardOrientation(), lastMove: p ? sq(p.uci) : undefined, shapes: engineArrow(fen) });
+    requestEval(); // in «Разбор» Stockfish counts the line's position as well
+    renderCeval();
     renderEvalBar();
     return;
   }
@@ -483,7 +486,8 @@ function closePreview() {
   preview = null;
   renderPreview();
   renderBoard();
-  if (mode === "study") renderStudyPanel(); else renderPuzzlePanel();
+  if (mode === "study") { renderStudyPanel(); requestEval(); } else renderPuzzlePanel(); // Stockfish was on the line's position
+  renderEvalBar();
   reportView();
 }
 
@@ -1182,7 +1186,7 @@ function engineArrow(fen) {
 
 function requestEval() {
   clearTimeout(ceval.timer);
-  if (!study.engine || mode !== "study" || preview || isLive()) return;
+  if (!study.engine || mode !== "study" || isLive()) return;
   const fen = shownFen;
   if (ceval.fen === fen && ceval.deep) return;
   if (ceval.fen !== fen) { ceval.fen = fen; ceval.res = null; ceval.deep = false; }
@@ -1196,8 +1200,8 @@ function requestEval() {
         ceval.deep = seconds > 1;
         renderCeval();
         renderEvalBar();
-        if (mode === "study" && !preview && shownFen === fen) {
-          const node = curNode();
+        if (mode === "study" && shownFen === fen) {
+          const node = preview ? null : curNode(); // a line from text has no tree node: only the engine's arrow
           setAutoShapes([...(node?.shapes || []), ...glyphShape(node), ...engineArrow(fen)]);
         }
       } catch { return; }
@@ -1230,7 +1234,7 @@ function renderCeval() {
 
 function renderEvalBar() {
   const bar = $("#evalbar");
-  const on = study.engine && mode === "study" && !preview && !isLive();
+  const on = study.engine && mode === "study" && !isLive();
   if (bar.hidden === on) { bar.hidden = !on; layout(); }
   if (!on) return;
   const l = ceval.fen === shownFen ? ceval.res?.lines?.[0] : null;
