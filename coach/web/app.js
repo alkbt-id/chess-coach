@@ -1187,7 +1187,7 @@ const pz = { list: [], byId: {}, prog: {}, cur: null, st: null, session: { done:
 
 // ---------------- LPUZZLE: rated Lichess puzzles, picked by the user's weaknesses ----------------
 // login is shared with live games (coach/lichess.py); results go to the user's puzzle rating on Lichess
-const lp = { on: false, ready: false, status: null, ru: {}, cur: null, meta: null, st: null, difficulty: "normal", angle: "weak", weak: null, showWeak: false };
+const lp = { on: false, ready: false, loading: false, req: 0, status: null, ru: {}, cur: null, meta: null, st: null, difficulty: "normal", angle: "weak", weak: null, showWeak: false };
 const DIFF_RU = { easiest: "Самые лёгкие", easier: "Легче", normal: "Мой уровень", harder: "Сложнее", hardest: "Самые сложные" };
 const themeRu = (t) => lp.ru[t] || t;
 const lpSave = () => http.send("PUT", "/api/settings", { lpuzzle: { on: lp.on, difficulty: lp.difficulty, angle: lp.angle } }).catch(() => {});
@@ -1219,19 +1219,24 @@ function lpView() {
 }
 
 async function lpNext() {
+  const my = ++lp.req; // only the latest request fills the board (the theme may change while one is on the way)
+  lp.loading = true;
   lp.cur = null;
   lp.st = null;
   closePreviewSilently();
   renderPuzzlePanel();
   try {
     const r = await post("/api/lpuzzle/next", { difficulty: lp.difficulty, angle: lp.angle });
+    if (my !== lp.req) return;
     lp.cur = r.puzzle;
     lp.meta = { angle: r.angle, angleName: r.angleName, weak: r.weak, why: r.why, rated: r.rated };
     lp.st = { step: 0, fen: r.puzzle.fen, last: r.puzzle.last, failed: false, done: false, submitted: false, why: null, wrong: null, result: null, shapes: [] };
     if (r.glicko && lp.status) lp.status.glicko = r.glicko;
   } catch (err) {
+    if (my !== lp.req) return;
     lp.st = { error: String(err.message || err) };
   }
+  lp.loading = false;
   if (mode === "puzzle") { lpBoard(); renderPuzzlePanel(); renderMeta(); reportView(); }
 }
 
@@ -1870,8 +1875,12 @@ function renderFilters() {
 
 function renderPuzzle() {
   if (mode !== "puzzle") return;
-  if (!lp.ready) lpEnsure().then(() => { if (lp.on && mode === "puzzle") { if (!lp.cur) lpNext(); else { lpBoard(); renderPuzzlePanel(); } } });
-  if (lp.on) { if (lp.cur) lpBoard(); renderPuzzlePanel(); renderMeta(); return; }
+  if (!lp.ready) lpEnsure().then(() => { if (lp.on && mode === "puzzle") renderPuzzle(); });
+  if (lp.on) {
+    // no puzzle and none on the way (e.g. the app opened in another mode while the settings were loading): fetch one
+    if (lp.cur) lpBoard(); else if (!lp.loading && !lp.st) lpNext();
+    renderPuzzlePanel(); renderMeta(); return;
+  }
   if (!pz.cur) { const p = pickNext(); if (p) { loadPuzzle(p); return; } }
   if (!preview) puzzleBoard();
   renderPuzzlePanel();
