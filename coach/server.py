@@ -1,4 +1,4 @@
-"""Local HTTP server behind the desktop window (127.0.0.1 only).
+"""Local HTTP server behind the desktop window (127.0.0.1; the home network only with a key, coach/lan.py).
 
 UI: static files, /api/state, /api/events (SSE), /api/view (what the window shows), puzzle progress and
 explanations, study tree edits, chats, jobs. Claude Code outside the app reaches the same board
@@ -22,7 +22,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import board, explain, jobs, lichess, live, review
+from . import board, explain, jobs, lan, lichess, live, review
 from .lichess_puzzles import LP, THEME_RU, pick_weak, weak_themes
 from .board import DATA, S, broadcast, save_json
 from .chat import CHATS, EFFORTS, MODELS
@@ -294,7 +294,7 @@ async def chat_close(request: Request):
 
 # ---------------- Lichess: the login (coach/lichess.py) and live games (coach/live.py) ----------------
 CALLBACK = f"http://127.0.0.1:{PORT}/api/lichess/callback"
-ORIGINS = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
+ORIGINS = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}", *([lan.origin()] if lan.enabled() else [])}
 
 
 def li_route(fn):

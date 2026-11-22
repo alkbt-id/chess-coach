@@ -7,6 +7,7 @@ repository (each git worktree) sees the same games, chats and Lichess login:
   lichess/      games.ndjson and profile.json (scripts/fetch_games.py)
   analysis/     moves.jsonl (scripts/analyze.py)
   puzzles.json  puzzles from the user's mistakes (scripts/make_puzzles.py)
+  tls/          the https certificate for the iPad (coach/lan.py), if set up
 COACH_HOME moves all of it; COACH_DATA moves only app/ (a test server with its own state and the real games).
 
 Every key of config.toml is optional and empty by default:
