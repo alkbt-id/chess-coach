@@ -113,6 +113,14 @@ function inline(text, lines = null) {
   const keep = [];
   const stash = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
   let s = esc(text).replace(/`([^`]+)`/g, (_, c) => stash(`<code>${c}</code>`));
+  // a line with the moves that lead to it, written by Claude and hidden (wayLine): [3...Bf5](#1.d4 d5 2.c4 dxc4 3.e3)
+  // shows «3...Bf5». While a reply streams in, an unfinished one at the end shows its moves only.
+  s = s.replace(/\[([^\]\n]+)\]\(#([^)\n]*)(\)|$)/g, (_, shown, way, end) => {
+    let i = 0;
+    const inner = shown.replace(TOK_RE, (t) => `<b class="mvl" data-i="${i++}">${t}</b>`);
+    if (!i) return shown;
+    return stash(end ? `<span class="mseq" data-way="${way.trim()}">${inner}</span>` : `<span class="mseq">${inner}</span>`);
+  });
   if (lines) {
     s = s.replace(/\{L(\d+)\}/g, (_, k) => {
       const ln = lines[Number(k)];
@@ -571,6 +579,10 @@ document.addEventListener("click", (e) => {
     setTimeout(() => m.classList.remove("miss"), 1500);
     return;
   }
+  if (line.way) { // Claude wrote the way to the line: from the board's start, to step through
+    openPreview({ start: line.way.start, plies: [...line.way.before, ...line.plies] }, line.way.before.length + i, "Вариант из текста");
+    return;
+  }
   if (line.hist) { // a move of the game before the board: the game up to it, to step through
     openPreview({ start: line.hist.start, plies: [...line.hist.before, ...line.plies] }, line.hist.before.length + i, "Партия до этой доски");
     return;
@@ -667,6 +679,45 @@ function treeMatch(toks, other = null, prefer = null) {
   return best?.line || null;
 }
 
+// ---------------- a line with its way, written by Claude ----------------
+// [3...Bf5](#1.d4 d5 2.c4 dxc4 3.e3): Claude writes the moves that lead to a line in a hidden part, so the app knows
+// the line for sure and does not guess. The way is played from the start of a board of this chat (the one on screen
+// first), from the first move of the game before that board, or from the initial position; every move number in it
+// must fit. null when it fits none of them (a slip of Claude's): then the line is guessed as for plain text.
+function wayStarts() {
+  const out = [];
+  const add = (fen, sc) => { if (fen && !out.some((x) => x.fen === fen)) out.push({ fen, sc }); };
+  if (mode === "study") {
+    for (const sc of [scene(), ...boardsOf(ch.cur).reverse()]) if (sc) { add(sc.root.fen, sc); add(histOf(sc)?.start, sc); }
+  } else if (pz.cur) add(pz.cur.fen, null);
+  add(START_FEN, null);
+  return out;
+}
+
+function wayLine(wayText, toks) {
+  const way = (wayText.match(TOK_RE) || []).map(parseTok);
+  const all = [...way, ...toks];
+  for (const { fen, sc } of wayStarts()) {
+    const plies = playSan(fen, all);
+    if (!plies || all.some((t, k) => t.num && !numFen(t)(k ? plies[k - 1].fen : fen))) continue;
+    const before = plies.slice(0, way.length);
+    const line = { start: before.at(-1)?.fen || fen, plies: plies.slice(way.length), way: { start: fen, before } };
+    if (sc && sc !== scene()) line.scene = sc.id;
+    // the moves that are in that board's tree: a click goes there
+    const root = sc ? sc.root : mode === "puzzle" ? pz.st?.tree : null;
+    const fens = [fen, ...plies.map((p) => p.fen)];
+    const j = root ? fens.findIndex((f) => fenKey(f) === fenKey(root.fen)) : -1;
+    if (j >= 0) {
+      line.nodes = [];
+      for (let p = j, cur = root; p < plies.length && (cur = cur.children.find((c) => c.uci === plies[p].uci)); p++) {
+        if (p >= way.length) line.nodes[p - way.length] = cur;
+      }
+    }
+    return line;
+  }
+  return null;
+}
+
 // ---------------- a line read in the light of the text before it ----------------
 // "after 2...dxc4 3.e3 you played 3...Bf5 twice": 3...Bf5 goes on from 2...dxc4 3.e3, not from another position with
 // black's 3rd move somewhere in the tree (a click showed 3...Bf5 in the London). So a line is looked for first from
@@ -692,7 +743,8 @@ function inContext(seq, toks, how) {
   for (const prev of linesBefore(seq)) {
     const ctx = textLine(prev);
     if (!ctx?.plies?.length) continue;
-    const fens = [ctx.start, ...ctx.plies.map((p) => p.fen)].reverse();
+    const way = ctx.way ? [ctx.way.start, ...ctx.way.before.map((p) => p.fen)] : [];
+    const fens = [...new Set([...way, ctx.start, ...ctx.plies.map((p) => p.fen)])].reverse();
     const prefer = new Map();
     fens.forEach((f, i) => { if (!prefer.has(fenKey(f))) prefer.set(fenKey(f), i); });
     const board = ctx.scene ? study.scenes.find((s) => s.id === ctx.scene) : null; // a line about another board of this chat
@@ -709,7 +761,8 @@ function inContext(seq, toks, how) {
   return null;
 }
 
-// a line written in text, read without guessing from the board: from the lines before it in the text, the move tree,
+// a line written in text, read without guessing from the board: by the way Claude wrote for it (wayLine), else from
+// the lines before it in the text, the move tree,
 // the game before the board, the tree of another board of this chat. A numbered move ("3...Bf5") is read from the
 // text before it first; an unnumbered one ("Qb3") fits too many positions, so there the tree comes before the rules.
 // Cached per tree; `fresh`: read again (a click — the current path in the tree counts)
@@ -719,7 +772,7 @@ function textLine(seq, fresh = false) {
   if (!fresh && seq._tl && seq._tl.tree === tree && seq._tl.mode === mode) return seq._tl.line;
   const toks = $$(".mvl", seq).map((x) => parseTok(x.textContent));
   const num = !!toks[0].num;
-  const line = inContext(seq, toks, num ? "both" : "tree") || treeMatch(toks) || (mode === "study" && histMatch(toks, scene()))
+  const line = (seq.dataset.way !== undefined && wayLine(seq.dataset.way, toks)) || inContext(seq, toks, num ? "both" : "tree") || treeMatch(toks) || (mode === "study" && histMatch(toks, scene()))
     || otherBoard(toks, true) || (!num && inContext(seq, toks, "rules")) || null;
   seq._tl = { tree, mode, line };
   return line;
