@@ -1,9 +1,13 @@
 // Draws the app icon: the Merida white knight on a 2x2 piece of the lichess "brown" board.
-// usage: swift make_icon.swift <out.iconset> <pieces.merida.css>
+// usage: swift make_icon.swift <out.iconset> <pieces.merida.css>   — the Mac icon (rounded tile with margins)
+//        swift make_icon.swift --web <coach/web> <pieces.merida.css> — apple-touch-icon.png (square, full-bleed:
+//        iOS rounds the corners itself and paints transparent margins black) and favicon.png
 import Cocoa
 
-let out = CommandLine.arguments[1]
-let css = try! String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8)
+let web = CommandLine.arguments[1] == "--web"
+let args = Array(CommandLine.arguments.dropFirst(web ? 2 : 1))
+let out = args[0]
+let css = try! String(contentsOfFile: args[1], encoding: .utf8)
 let re = try! NSRegularExpression(pattern: #"piece\.knight\.white \{\s*background-image: url\('data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)'\)"#)
 let m = re.firstMatch(in: css, range: NSRange(css.startIndex..., in: css))!
 let b64 = String(css[Range(m.range(at: 1), in: css)!])
@@ -11,15 +15,17 @@ let knight = NSImage(data: Data(base64Encoded: b64)!)!
 
 try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
 
-func png(_ px: Int) -> Data {
+/// fullBleed: the board fills the whole square, no rounding (for iOS); otherwise a rounded tile at 80%.
+func png(_ px: Int, fullBleed: Bool = false) -> Data {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
                                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     let s = CGFloat(px)
-    let rect = NSRect(x: s * 0.1, y: s * 0.1, width: s * 0.8, height: s * 0.8)
-    let path = NSBezierPath(roundedRect: rect, xRadius: s * 0.18, yRadius: s * 0.18)
+    let rect = fullBleed ? NSRect(x: 0, y: 0, width: s, height: s)
+                         : NSRect(x: s * 0.1, y: s * 0.1, width: s * 0.8, height: s * 0.8)
+    let path = fullBleed ? NSBezierPath(rect: rect) : NSBezierPath(roundedRect: rect, xRadius: s * 0.18, yRadius: s * 0.18)
     NSColor(red: 0.941, green: 0.851, blue: 0.710, alpha: 1).setFill()
     path.fill()
     path.addClip()
@@ -29,6 +35,13 @@ func png(_ px: Int) -> Data {
     knight.draw(in: rect.insetBy(dx: rect.width * 0.1, dy: rect.height * 0.1))
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
+}
+
+if web {
+    try! png(180, fullBleed: true).write(to: URL(fileURLWithPath: "\(out)/apple-touch-icon.png"))
+    try! png(64).write(to: URL(fileURLWithPath: "\(out)/favicon.png"))
+    print("web icons ->", out)
+    exit(0)
 }
 
 for (name, px) in [("16x16", 16), ("16x16@2x", 32), ("32x32", 32), ("32x32@2x", 64), ("128x128", 128),
