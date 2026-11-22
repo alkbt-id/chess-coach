@@ -557,7 +557,7 @@ document.addEventListener("click", (e) => {
   const seq = m.closest(".mseq");
   const i = Number(m.dataset.i);
   if (seq.dataset.line) { openPreview(LINES.get(seq.dataset.line), i, "Вариант"); return; }
-  const line = resolveMoves($$(".mvl", seq).map((x) => x.textContent));
+  const line = resolveSeq(seq);
   if (line?.scene) setScene(line.scene); // the line is about another board of this chat: that board comes on screen
   if (line?.nodes?.[i] && mode === "study") {
     closePreviewSilently();
@@ -624,8 +624,9 @@ function playSan(fen, toks) {
   return playLine(fen, ucis).plies;
 }
 
-// moves that are already in the move tree on screen (or of the board `other`): follow the tree (current path and main line first)
-function treeMatch(toks, other = null) {
+// moves that are already in the move tree on screen (or of the board `other`): follow the tree (current path and main line first).
+// `prefer` (position key -> rank, lower is better): only a line that starts from one of those positions, the best rank wins
+function treeMatch(toks, other = null, prefer = null) {
   const sc = other || (mode === "study" ? scene() : null);
   const root = sc ? sc.root : mode === "study" ? null : pz.st?.tree;
   if (!root) return null;
@@ -639,8 +640,12 @@ function treeMatch(toks, other = null) {
   for (let n = root.children[0]; n; n = n.children[0]) push(n);
   const all = (n) => n.children.forEach((c) => { push(c); all(c); });
   all(root);
+  let best = null;
   for (const n of order) {
     if (normSan(n.san) !== normSan(toks[0].san) || !numFits(n, toks[0])) continue;
+    const start = parent.get(n.id).fen;
+    const rank = prefer ? prefer.get(fenKey(start)) : 0;
+    if (rank === undefined || (best && rank >= best.rank)) continue;
     const nodes = [n];
     let cur = n;
     for (const t of toks.slice(1)) {
@@ -649,19 +654,83 @@ function treeMatch(toks, other = null) {
       nodes.push(next);
       cur = next;
     }
-    const start = parent.get(n.id).fen;
-    if (nodes.length === toks.length) return { start, plies: nodes.map(toPly), nodes, full: true };
-    const rest = playSan(cur.fen, toks.slice(nodes.length)); // partly in the tree: continue by the rules
-    if (rest) return { start, plies: [...nodes.map(toPly), ...rest], nodes, full: false };
+    let line = null;
+    if (nodes.length === toks.length) line = { start, plies: nodes.map(toPly), nodes, full: true };
+    else {
+      const rest = playSan(cur.fen, toks.slice(nodes.length)); // partly in the tree: continue by the rules
+      if (rest) line = { start, plies: [...nodes.map(toPly), ...rest], nodes, full: false };
+    }
+    if (!line) continue;
+    if (!prefer) return line;
+    best = { rank, line };
+  }
+  return best?.line || null;
+}
+
+// ---------------- a line read in the light of the text before it ----------------
+// "after 2...dxc4 3.e3 you played 3...Bf5 twice": 3...Bf5 goes on from 2...dxc4 3.e3, not from another position with
+// black's 3rd move somewhere in the tree (a click showed 3...Bf5 in the London). So a line is looked for first from
+// the positions of the lines written just before it: in the same comment, or in the same reply of Claude (its parts
+// between tool calls count as one); the nearest line first, its last position first.
+function linesBefore(seq) {
+  const ai = seq.closest(".msg-ai");
+  const parts = [];
+  if (ai) {
+    for (let el = ai; el && !el.classList.contains("msg-user"); el = el.previousElementSibling) {
+      if (el.classList.contains("msg-ai")) parts.unshift(el);
+    }
+  } else parts.push(seq.closest(".rich") || seq.parentElement);
+  const all = parts.flatMap((el) => $$(".mseq", el));
+  return all.slice(0, all.indexOf(seq)).reverse();
+}
+
+// how: "tree" — only moves of the tree that start from a position of a line before; "rules" — only by the rules from
+// such a position; "both" — whichever starts nearer the end of that line
+function inContext(seq, toks, how) {
+  const fits = numFen(toks[0]) || (() => true);
+  let looked = 0;
+  for (const prev of linesBefore(seq)) {
+    const ctx = textLine(prev);
+    if (!ctx?.plies?.length) continue;
+    const fens = [ctx.start, ...ctx.plies.map((p) => p.fen)].reverse();
+    const prefer = new Map();
+    fens.forEach((f, i) => { if (!prefer.has(fenKey(f))) prefer.set(fenKey(f), i); });
+    const board = ctx.scene ? study.scenes.find((s) => s.id === ctx.scene) : null; // a line about another board of this chat
+    const inTree = how !== "rules" ? treeMatch(toks, board, prefer) : null;
+    const rank = inTree ? prefer.get(fenKey(inTree.start)) : Infinity;
+    for (const [i, fen] of (how !== "tree" ? fens : []).entries()) { // by the rules: the moves are not in the tree (yet)
+      if (i >= rank) break;
+      const plies = fits(fen) && playSan(fen, toks);
+      if (plies?.length) return { start: fen, plies, ...(ctx.scene && { scene: ctx.scene }) };
+    }
+    if (inTree) return ctx.scene ? { ...inTree, scene: ctx.scene } : inTree;
+    if (++looked === 3) break;
   }
   return null;
 }
 
-// in order: the tree on screen, the tree of another board of this chat, the rules from a position on screen,
-// the rules from a position of another board of this chat (the moves that led to a board's start count as its tree)
-function resolveMoves(rawToks) {
-  const toks = rawToks.map(parseTok);
-  return treeMatch(toks) || (mode === "study" && histMatch(toks, scene())) || otherBoard(toks, true) || byRules(toks) || otherBoard(toks, false);
+// a line written in text, read without guessing from the board: from the lines before it in the text, the move tree,
+// the game before the board, the tree of another board of this chat. A numbered move ("3...Bf5") is read from the
+// text before it first; an unnumbered one ("Qb3") fits too many positions, so there the tree comes before the rules.
+// Cached per tree; `fresh`: read again (a click — the current path in the tree counts)
+function textLine(seq, fresh = false) {
+  if (seq.dataset.line) return LINES.get(seq.dataset.line) || null;
+  const tree = mode === "study" ? scene() : pz.st?.tree;
+  if (!fresh && seq._tl && seq._tl.tree === tree && seq._tl.mode === mode) return seq._tl.line;
+  const toks = $$(".mvl", seq).map((x) => parseTok(x.textContent));
+  const num = !!toks[0].num;
+  const line = inContext(seq, toks, num ? "both" : "tree") || treeMatch(toks) || (mode === "study" && histMatch(toks, scene()))
+    || otherBoard(toks, true) || (!num && inContext(seq, toks, "rules")) || null;
+  seq._tl = { tree, mode, line };
+  return line;
+}
+
+// a line written in text (the `.mseq` element), in order: the lines before it in the text, the tree on screen, the tree
+// of another board of this chat, the rules from a position on screen, the rules from a position of another board of
+// this chat (the moves that led to a board's start count as its tree)
+function resolveSeq(seq) {
+  const toks = $$(".mvl", seq).map((x) => parseTok(x.textContent));
+  return textLine(seq, true) || byRules(toks) || otherBoard(toks, false);
 }
 
 // ---------------- the moves that led to a board's start ----------------
@@ -780,7 +849,7 @@ function hoverLine(t) {
   if (!seq) return null;
   const i = Number(t.dataset.i);
   if (seq.dataset.line) { const line = LINES.get(seq.dataset.line); return line ? { line, i } : null; }
-  const line = resolveMoves($$(".mvl", seq).map((x) => x.textContent));
+  const line = resolveSeq(seq);
   return line ? { line, i: Math.min(i, line.plies.length - 1) } : null;
 }
 
@@ -850,16 +919,13 @@ document.addEventListener("mouseout", (e) => {
 document.addEventListener("mousedown", hideHover);
 
 // ---------------- the move on the board, highlighted in text ----------------
-// a written line counts when it is in the move tree (or is an engine line); the result is cached per tree
+// a written line counts when it is an engine line, in the move tree on screen, or goes on from a line before it in
+// the text — not a guess from the board (textLine, cached per tree)
 function seqLine(seq) {
   if (seq.dataset.line) return LINES.get(seq.dataset.line) || null;
-  const tree = mode === "study" ? scene() : pz.st?.tree;
-  if (!tree) return null;
-  if (seq._res && seq._res.tree === tree) return seq._res.line;
-  const toks = $$(".mvl", seq).map((x) => parseTok(x.textContent));
-  const line = treeMatch(toks) || (mode === "study" ? histMatch(toks, tree) : null);
-  seq._res = { tree, line: line?.nodes ? line : null };
-  return seq._res.line;
+  if (!(mode === "study" ? scene() : pz.st?.tree)) return null;
+  const line = textLine(seq);
+  return line && !line.scene ? line : null;
 }
 
 // The line on the board, as position keys: the tree from its root to the position shown and on along its main line
