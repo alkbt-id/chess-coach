@@ -933,7 +933,7 @@ function showHover(t) {
   const before = r.i === 0 ? r.line.start : r.line.plies[r.i - 1].fen;
   if (fenKey(before) === fenKey(shownFen)) tempArrow(ply.uci);
   else if (r.line.threat && r.i === 0 && fenKey(r.line.base) === fenKey(shownFen)) tempArrow(ply.uci, "red");
-  hov.cg.set({ fen: ply.fen, orientation: cg.state.orientation, lastMove: sq(ply.uci), check: new Chess(ply.fen).inCheck() ? turnOf(ply.fen) : false });
+  hov.cg.set({ fen: ply.fen, orientation: t.closest("[data-side]")?.dataset.side || cg.state.orientation, lastMove: sq(ply.uci), check: new Chess(ply.fen).inCheck() ? turnOf(ply.fen) : false });
   const rect = t.getBoundingClientRect();
   const W = Math.min(320, innerWidth - 16, innerHeight - 16); // smaller on a narrow screen
   hov.el.style.width = hov.el.style.height = `${W}px`;
@@ -3377,12 +3377,13 @@ function repAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
 }
 // moves of the repertoire in text as an exact line from the start: a small board on hover and the line on the
-// board on a click, like moves anywhere in the app; `from` hides the moves before it, `bold` marks one
-function repLineHtml(ucis, { from = 0, bold = -1 } = {}) {
+// board on a click, like moves anywhere in the app; `from` hides the moves before it, `bold` marks one, `side` is
+// the colour the line is played for: the small board shows it at the bottom
+function repLineHtml(ucis, { from = 0, bold = -1, side } = {}) {
   const line = playLine(START_FEN, ucis);
   if (line.plies.length <= from) return "";
   const key = regLine(line);
-  return `<span class="mseq" data-nf data-line="${key}">${line.plies.map((p, i) => (i < from ? "" : `${p.num.endsWith(".") || i === from ? p.num : ""}<b class="mvl${i === bold ? " rl-hl" : ""}" data-i="${i}">${esc(p.san)}</b>`)).filter(Boolean).join(" ")}</span>`;
+  return `<span class="mseq" data-nf data-line="${key}"${side ? ` data-side="${side}"` : ""}>${line.plies.map((p, i) => (i < from ? "" : `${p.num.endsWith(".") || i === from ? p.num : ""}<b class="mvl${i === bold ? " rl-hl" : ""}" data-i="${i}">${esc(p.san)}</b>`)).filter(Boolean).join(" ")}</span>`;
 }
 const repWay = (tree, nodeId) => (tree && tindex(tree).get(nodeId) ? pathTo(tree, nodeId).map((n) => n.uci) : []);
 
@@ -3431,7 +3432,7 @@ function repDrillButton(scope, id) {
 
 function repTocHtml() {
   const row = (s) => `<button type="button" class="rep-row${s.status === "retired" ? " retired" : ""}" data-sec="${esc(s.id)}" style="--d:${repDepth(s)}">
-      <span class="rn">${esc(s.name)}</span><span class="rp">${repLineHtml(repWay(repTree(s.color), s.node)) || esc(s.path)}</span>${repScoreHtml(s)}${s.lessons?.length ? `<span class="rl">${s.lessons.length} ${plural(s.lessons.length, "урок", "урока", "уроков")}</span>` : ""}</button>`;
+      <span class="rn">${esc(s.name)}</span><span class="rp">${repLineHtml(repWay(repTree(s.color), s.node), { side: s.color }) || esc(s.path)}</span>${repScoreHtml(s)}${s.lessons?.length ? `<span class="rl">${s.lessons.length} ${plural(s.lessons.length, "урок", "урока", "уроков")}</span>` : ""}</button>`;
   const group = (color) => {
     const list = rep.data.sections.filter((s) => s.color === color && s.status !== "retired");
     return `<section class="rep-group"><h2>${REP_SIDE[color]}</h2>${list.map(row).join("") || `<p class="hint">Разделов пока нет.</p>`}</section>`;
@@ -3473,7 +3474,7 @@ function repSectionHtml(s) {
   const kids = rep.data.sections.filter((x) => x.parent === s.id);
   const lessons = lessonsOf(s.id);
   const inLesson = lessonSection(ch.cur) === s.id;
-  const way = onTree && node ? pathTo(tree, node.id).map((n, i) => inlineMove(n, study.node, i === 0)).join("") : repLineHtml(repWay(tree, s.node)) || esc(s.path);
+  const way = onTree && node ? pathTo(tree, node.id).map((n, i) => inlineMove(n, study.node, i === 0)).join("") : repLineHtml(repWay(tree, s.node), { side: s.color }) || esc(s.path);
   const crumbs = `<div class="rep-crumbs"><button type="button" class="link-btn" data-rep-toc>← Оглавление</button>
       <span>${REP_SIDE[s.color]}${parent ? ` › <button type="button" class="link-btn" data-sec="${esc(parent.id)}">${esc(parent.name)}</button>` : ""}</span></div>`;
   const title = rep.rename
@@ -3566,7 +3567,7 @@ function repTrialHtml(toc) {
   const tr = repTrial();
   if (!tr) return "";
   const way = repWay(scene(), tr.base.id);
-  const moves = repLineHtml([...way, ...tr.plies.map((p) => p.uci)], { from: way.length });
+  const moves = repLineHtml([...way, ...tr.plies.map((p) => p.uci)], { from: way.length, side: scene()?.rep });
   return `<div class="rep-trial"><div><b>Пробный вариант</b> — ещё не в репертуаре: <span class="rep-path">${moves}</span></div>
     <div class="actions">${toc ? `<button type="button" class="btn small primary" id="rep-trial-section">Сделать разделом</button>` : ""}
       <button type="button" class="btn small${toc ? "" : " primary"}" id="rep-trial-save">Записать в репертуар</button>
@@ -3851,9 +3852,9 @@ function repGamesHtml(s) {
   const tree = repTree(s.color);
   const row = (x, kind, i) => {
     const way = repWay(tree, x.node);
-    const move = kind === "end" ? `после ${repLineHtml(way) || esc(x.before)}` : repLineHtml([...way, x.uci], { bold: way.length });
+    const move = kind === "end" ? `после ${repLineHtml(way, { side: s.color }) || esc(x.before)}` : repLineHtml([...way, x.uci], { bold: way.length, side: s.color });
     const want = tree && tindex(tree).get(x.node)?.n.children.find((c) => c.san === x.expected?.[0]);
-    const exp = (kind === "user" || kind === "habit") && want ? ` <span class="rg-exp">вместо ${repLineHtml([...way, want.uci], { from: way.length })}</span>` : "";
+    const exp = (kind === "user" || kind === "habit") && want ? ` <span class="rg-exp">вместо ${repLineHtml([...way, want.uci], { from: way.length, side: s.color })}</span>` : "";
     return `<div class="rg-row ${kind}"><span class="rep-path">${move}${exp}</span><span class="rg-n">${rgGames(x.games)}</span>
       <span class="rg-act"><button type="button" class="link-btn" data-rg-goto="${esc(x.node)}">показать</button>${kind === "opponent"
         ? `<button type="button" class="link-btn" data-rg-add="${i}">добавить в дерево</button>` : ""}<button type="button" class="link-btn" data-rg-ask="${kind}" data-i="${i}">спросить Claude</button></span></div>`;
@@ -3886,10 +3887,10 @@ function repAfterGame(g) {
   if (!a.kind) return "";
   const ucis = g.moves.map((m) => m.uci);
   const at = a.ply ? a.ply - 1 : ucis.length; // the move that left the tree
-  const where = at ? `после ${repLineHtml(ucis.slice(0, at))}` : "в начальной позиции";
-  const played = a.ply ? repLineHtml(ucis.slice(0, a.ply), { from: at }) : "";
+  const where = at ? `после ${repLineHtml(ucis.slice(0, at), { side: g.color })}` : "в начальной позиции";
+  const played = a.ply ? repLineHtml(ucis.slice(0, a.ply), { from: at, side: g.color }) : "";
   const want = repTree(g.color) && tindex(repTree(g.color)).get(a.node)?.n.children.find((c) => c.san === a.expected?.[0]);
-  const text = a.kind === "user" ? `${where} ты сыграл ${played}, а в твоём репертуаре ${want ? repLineHtml([...ucis.slice(0, at), want.uci], { from: at }) : esc(a.expected[0])}`
+  const text = a.kind === "user" ? `${where} ты сыграл ${played}, а в твоём репертуаре ${want ? repLineHtml([...ucis.slice(0, at), want.uci], { from: at, side: g.color }) : esc(a.expected[0])}`
     : a.kind === "opponent" ? `${where} соперник сыграл ${played} — на этот ход в репертуаре ответа нет`
       : a.kind === "end" ? `партия шла по репертуару до конца подготовки — ${where}` : "вся партия прошла по репертуару";
   return `<div class="rep-after ${a.kind}"><b>Репертуар${a.section_name ? ` · ${esc(a.section_name)}` : ""}:</b> ${text}.
@@ -4105,8 +4106,8 @@ function repGameHtml() {
       : `<div class="drill-box">${myTurn ? "Твой ход" : "Соперник ходит…"}</div>`;
   const notes = g.notes.map((x) => {
     const at = x.way.length;
-    const extra = x.kind === "user" ? `: сыграл ${repLineHtml([...x.way, x.played], { from: at })}, а в дереве ${repLineHtml([...x.way, x.want], { from: at })}`
-      : x.kind === "opp" ? `: ${repLineHtml([...x.way, x.played], { from: at })}` : "";
+    const extra = x.kind === "user" ? `: сыграл ${repLineHtml([...x.way, x.played], { from: at, side: g.color })}, а в дереве ${repLineHtml([...x.way, x.want], { from: at, side: g.color })}`
+      : x.kind === "opp" ? `: ${repLineHtml([...x.way, x.played], { from: at, side: g.color })}` : "";
     return `<div class="rg-row ${x.kind === "user" ? "user" : x.kind === "opp" ? "opponent" : ""}"><span>${esc(x.text)}${extra}.</span></div>`;
   }).join("");
   const actions = g.over
@@ -4117,7 +4118,7 @@ function repGameHtml() {
     <p class="hint">Ты играешь ${g.color === "white" ? "белыми" : "чёрными"}. Соперник ходит по твоему дереву${g.plan ? " и по варианту, который выбрал Claude" : ""}, потом — Stockfish ≈${g.elo}.${inBook ? ` По дереву сыграно ${inBook} ${plural(inBook, "полуход", "полухода", "полуходов")}.` : ""}</p>
     ${g.comment ? `<div class="rep-trial"><div><b>Claude:</b> ${esc(g.comment)}</div></div>` : ""}
     ${status}
-    <div class="rep-path drill-line">${repLineHtml(g.ucis) || "начальная позиция"}</div>
+    <div class="rep-path drill-line">${repLineHtml(g.ucis, { side: g.color }) || "начальная позиция"}</div>
     ${notes ? `<div class="game-notes">${notes}</div>` : ""}
     <div class="rep-actions">${actions}</div>`;
 }
