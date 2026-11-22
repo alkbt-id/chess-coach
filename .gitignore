@@ -17,3 +17,6 @@ coach/web/vendor/sound/*.mp3
 
 .DS_Store
 *.tmp
+
+# Personal settings (copy of config.example.toml)
+config.toml

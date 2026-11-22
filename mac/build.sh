@@ -42,6 +42,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+# where the window finds the server (mac/main.swift reads it)
+/usr/libexec/PlistBuddy -c "Add :ChessCoachRoot string $ROOT" "$APP/Contents/Info.plist"
 codesign --force -s - "$APP" >/dev/null 2>&1
 touch "$APP"
 # Register chess-coach:// right away, not on the next launch from Finder.

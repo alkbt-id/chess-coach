@@ -4,12 +4,16 @@ thrown games, unpunished opponent errors."""
 import collections
 import json
 import math
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from coach.config import NO_USER, lichess_user
+
 MOVES = ROOT / "data/analysis/moves.jsonl"
 GAMES = ROOT / "data/lichess/games.ndjson"
-USER = "alkbtz"
+USER = lichess_user() or sys.exit(NO_USER)
 
 # Lichess thresholds, in win-percent points lost by one move.
 INACC, MISTAKE, BLUNDER = 5, 10, 15

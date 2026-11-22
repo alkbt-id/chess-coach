@@ -6,7 +6,9 @@ import threading
 import chess
 import chess.engine
 
-STOCKFISH = "/opt/homebrew/bin/stockfish"
+from . import config
+
+STOCKFISH = config.stockfish()
 
 
 def win_pct(cp: int) -> float:

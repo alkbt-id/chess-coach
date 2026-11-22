@@ -10,9 +10,12 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from coach.config import NO_USER, lichess_user
+
 GAMES = ROOT / "data/lichess/games.ndjson"
 PROFILE = ROOT / "data/lichess/profile.json"
-USER = "alkbtz"
+USER = lichess_user() or sys.exit(NO_USER)
 API = "https://lichess.org/api"
 HEADERS = {"User-Agent": "chess-coach-local/0.1"}
 

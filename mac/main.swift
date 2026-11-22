@@ -4,7 +4,9 @@
 import Cocoa
 import WebKit
 
-let projectRoot = "/Users/alkbt/develop/chess"
+// The project folder: mac/build.sh writes it into Info.plist; COACH_ROOT sets it for a test build run outside the bundle.
+let projectRoot = ProcessInfo.processInfo.environment["COACH_ROOT"]
+    ?? (Bundle.main.object(forInfoDictionaryKey: "ChessCoachRoot") as? String) ?? ""
 let port = Int(ProcessInfo.processInfo.environment["COACH_PORT"] ?? "") ?? 8737
 let appURL = URL(string: "http://127.0.0.1:\(port)/")!
 let pingURL = URL(string: "http://127.0.0.1:\(port)/api/ping")!
@@ -51,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         loading = true
         ping { ok in
             DispatchQueue.main.async {
-                if ok { self.open() } else { self.startServer(); self.waitForServer(attempts: 120) }
+                if ok { self.open() } else if self.startServer() { self.waitForServer(attempts: 120) }
             }
         }
     }
@@ -61,9 +63,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.load(URLRequest(url: appURL))
     }
 
-    func startServer() {
+    /// false (and a message in the window) when the server cannot be started
+    func startServer() -> Bool {
+        let python = projectRoot + "/.venv/bin/python"
+        guard !projectRoot.isEmpty, FileManager.default.isExecutableFile(atPath: python) else {
+            loading = false
+            web.loadHTMLString(placeholder(projectRoot.isEmpty
+                ? "Не знаю, где папка проекта: собери приложение заново через mac/build.sh"
+                : "Нет \(python): выполни uv sync в папке проекта"), baseURL: nil)
+            return false
+        }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: projectRoot + "/.venv/bin/python")
+        p.executableURL = URL(fileURLWithPath: python)
         p.arguments = ["-m", "coach"]
         p.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
         if !FileManager.default.fileExists(atPath: logPath) {
@@ -75,15 +86,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             p.standardError = h
         }
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         env["PYTHONUNBUFFERED"] = "1"
         p.environment = env
         do {
             try p.run()
             server = p
+            return true
         } catch {
             loading = false
             web.loadHTMLString(placeholder("Не удалось запустить сервер: \(error.localizedDescription)"), baseURL: nil)
+            return false
         }
     }
 

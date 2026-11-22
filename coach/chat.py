@@ -31,7 +31,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import board, jobs
+from . import board, config, jobs
 from .board import DATA, ROOT, S, broadcast, load_json, save_json
 from .scenes import SceneError
 
@@ -50,7 +50,7 @@ CHATS_DIR = DATA / "chats"
 SYSTEM_APPEND = """
 # You are inside the desktop app «Шахматный тренер»
 The user talks to you in the app's chat panel; next to it is a chess board they are looking at.
-User: Lichess alkbtz, ~1300 rapid, puzzle rating ~1780 — sees tactics in puzzles, misses them in games.
+<<USER>>
 Reply in Russian, short and concrete; the chat renders Markdown. Moves in SAN with numbers (25.a4 Ng2 26.Kb3):
 the app makes them clickable and shows the line on the board, so always write lines from a position that is
 on the board (the current diagram or puzzle).
@@ -79,6 +79,22 @@ after it ends, its moves are a normal diagram you can review.
 - Long work runs as a background job: `run_job` (fetch_games, analyze, make_puzzles, update = all three, report);
   you get a message when it finishes. Use Read/Grep/Bash for anything else; risky tools ask the user first.
 """
+
+
+def user_line() -> str:
+    """Who the user is, for Claude: the Lichess account with its ratings and the `about` note from config.toml."""
+    name = config.lichess_user()
+    if not name:
+        return "User: Lichess account not known yet (not signed in to Lichess in the app, no lichess_user in config.toml)."
+    prof = load_json(ROOT / "data/lichess/profile.json", {})
+    if (prof.get("id") or "").lower() != name:
+        prof = {}  # the profile of another account, before fetch_games refreshes it
+    perfs = prof.get("perfs") or {}
+    ratings = [f"{k} {p['rating']}" for k in ("bullet", "blitz", "rapid", "classical", "puzzle")
+               if (p := perfs.get(k)) and p.get("games")]
+    about = config.about().rstrip(".")
+    return (f"User: Lichess {prof.get('username') or name}" + "".join(f", {r}" for r in ratings)
+            + (f" — {about}" if about else "") + ".")
 
 
 def summarize_input(name: str, inp: dict) -> str:
@@ -400,7 +416,7 @@ class ChatManager:
             effort=chat.effort,  # type: ignore[arg-type]
             cwd=str(ROOT),
             resume=chat.session_id,
-            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND.replace("<<USER>>", user_line())},
             setting_sources=["user", "project", "local"],
             mcp_servers={"board": make_tools(chat.id)},
             allowed_tools=["mcp__board", "Read", "Glob", "Grep", "TodoWrite"],

@@ -17,7 +17,7 @@ from datetime import datetime
 import chess
 import chess.engine
 
-from . import jobs, live, scenes
+from . import config, jobs, live, scenes
 from .board import MAX_SCENES, ROOT, S, broadcast
 from .engine import STOCKFISH, win_pct
 from .lichess import ACCOUNT
@@ -36,13 +36,10 @@ class ReviewError(ValueError):
     pass
 
 
-HISTORY_USER = "alkbtz"  # whose games scripts/fetch_games.py downloads
-
-
 def _my_color(players: dict) -> str:
     ids = {((players.get(c) or {}).get("user") or {}).get("id", "").lower(): c for c in ("white", "black")}
-    for who in (HISTORY_USER, (ACCOUNT.user() or "").lower()):
-        if who in ids:
+    for who in (config.lichess_user(), (ACCOUNT.user() or "").lower()):
+        if who and who in ids:  # "" is the id of an AI opponent
             return ids[who]
     return "white"
 

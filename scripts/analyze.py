@@ -16,10 +16,13 @@ import chess
 import chess.engine
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from coach.config import NO_USER, lichess_user, stockfish
+
 GAMES = ROOT / "data/lichess/games.ndjson"
 OUT = ROOT / "data/analysis/moves.jsonl"
-USER = "alkbtz"
-STOCKFISH = "/opt/homebrew/bin/stockfish"
+USER = lichess_user() or sys.exit(NO_USER)
+STOCKFISH = stockfish()
 NODES = 400_000
 WORKERS = 14
 

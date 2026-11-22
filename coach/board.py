@@ -15,11 +15,10 @@ import anyio
 import chess
 
 from . import explain, scenes
+from .config import DATA, ROOT
 from .engine import ENGINE
 from .scenes import SceneError
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(os.environ.get("COACH_DATA") or ROOT / "data" / "app")
 PUZZLES = ROOT / "trainer" / "puzzles.json"
 MAX_SCENES = 300
 

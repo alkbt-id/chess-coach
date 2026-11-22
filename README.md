@@ -19,21 +19,25 @@
 
 ```bash
 brew install stockfish uv
-git clone https://github.com/alkbt-id/chess-coach.git ~/develop/chess
-cd ~/develop/chess
+git clone https://github.com/alkbt-id/chess-coach.git
+cd chess-coach
 uv sync
 ./scripts/fetch_sounds.sh   # звуки ходов Lichess; без них приложение работает беззвучно
 ./mac/build.sh
 open ~/Applications/Шахматный\ тренер.app
 ```
 
-`mac/build.sh` собирает окно в `~/Applications/Шахматный тренер.app`. Окно само запускает локальный сервер на `127.0.0.1:8737`. Без окна сервер запускается так: `uv run python -m coach`, интерфейс — в браузере на <http://127.0.0.1:8737/>.
+`mac/build.sh` собирает окно в `~/Applications/Шахматный тренер.app` и запоминает в нём, где лежит папка проекта. Если перенесёте папку, соберите окно заново. Окно само запускает локальный сервер на `127.0.0.1:8737`. Без окна сервер запускается так: `uv run python -m coach`, интерфейс — в браузере на <http://127.0.0.1:8737/>.
 
-Это личный проект, и часть настроек пока зашита в код:
+## Настройки
 
-- папка проекта — `projectRoot` в [mac/main.swift](mac/main.swift) (`~/develop/chess` у автора);
-- ник на Lichess — `USER` в [scripts/](scripts/) и `HISTORY_USER` в [coach/review.py](coach/review.py);
-- путь к Stockfish — `STOCKFISH` в [coach/engine.py](coach/engine.py) (`/opt/homebrew/bin/stockfish`).
+Чтобы приложение знало, чьи партии разбирать, войдите в Lichess в приложении (вкладка «Игра»). Больше ничего настраивать не нужно.
+
+Остальное — по желанию: скопируйте [config.example.toml](config.example.toml) в `config.toml` и заполните нужные строки. По умолчанию все они пустые.
+
+- `lichess_user` — ник на Lichess. Нужен, если не хотите входить в Lichess в приложении;
+- `stockfish` — путь к Stockfish, если он не в `/opt/homebrew/bin` или `/usr/local/bin`;
+- `about` — пара слов о себе для Claude в чате.
 
 ## Свои партии и задачи
 
@@ -46,7 +50,7 @@ uv run scripts/make_puzzles.py   # задачи из ошибок → trainer/pu
 uv run scripts/report.py         # сводка: точность, ошибки по фазам и по времени
 ```
 
-Все личные данные лежат в `data/` и в репозиторий не попадают: токен Lichess, чаты, партии, прогресс по задачам.
+Все личные данные лежат в `data/` и `config.toml` и в репозиторий не попадают: токен Lichess, чаты, партии, прогресс по задачам.
 
 ## Claude Code вне приложения
 
