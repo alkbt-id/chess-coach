@@ -149,6 +149,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .scene-nav { display: flex; align-items: center; gap: 4px; }
 .scene-nav select { flex: 1; min-width: 0; font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
 .scene-nav .icon { min-width: 28px; height: 26px; padding: 0 6px; }
+.scene-nav select.all-boards { flex: none; width: 100px; color: var(--muted); }
 h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balance; }
 /* tabs of the open chat's boards (a chat keeps several, each with its own tree) */
 .board-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }

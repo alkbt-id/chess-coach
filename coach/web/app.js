@@ -1108,25 +1108,26 @@ function studyPanelHtml() {
   const sc = scene();
   const newpos = `<form class="newpos" id="newpos-form"${study.newpos || !sc ? "" : " hidden"}>
       <input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
-  if (!sc) { // a chat without a board, or no boards yet: the list stays reachable
-    const list = study.scenes.length ? `<div class="scene-nav"><select id="scene-select" aria-label="Диаграммы">
-      <option value="" selected disabled>Пустая доска — выбрать другую</option>
-      ${study.scenes.map((x, i) => `<option value="${esc(x.id)}">${i + 1}. ${esc(x.title)}</option>`).reverse().join("")}</select></div>` : "";
+  if (!sc) { // a chat without a board, or no boards yet: every board stays reachable
+    const list = study.scenes.length ? `<div class="scene-nav">${allBoardsHtml()}</div>` : "";
     return `${list}<div class="empty"><h2>Анализ</h2>
       <p>Здесь будут позиции и варианты, которые показывает Claude, и твои собственные ходы — как на анализе Lichess.</p>
       <p>Двигай фигуры, чтобы начать свободный анализ, или задай позицию:</p></div>${newpos}${cevalHtml()}`;
   }
-  const idx = study.scenes.indexOf(sc);
-  const opts = study.scenes.map((x, i) => `<option value="${esc(x.id)}"${x === sc ? " selected" : ""}>${i + 1}. ${esc(x.title)}</option>`).reverse().join("");
+  const scope = scopeBoards(sc);
+  const idx = scope.indexOf(sc);
+  const opts = scope.map((x, i) => `<option value="${esc(x.id)}"${x === sc ? " selected" : ""}>${i + 1}. ${esc(x.title)}</option>`).reverse().join("");
+  const where = chatOf(sc) ? "этого чата" : "без чата";
   const own = boardsOf(chatOf(sc));
   // always shown for a chat's board, so the way to add a second board is in sight
   const tabs = own.length ? `<div class="board-tabs" role="tablist" aria-label="Доски этого чата"><span class="bt-label">Доски чата:</span>
       ${own.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
       <button type="button" class="btab add" id="board-add" title="Ещё одна доска в этом чате: начальная позиция, FEN или ходы">＋ доска</button></div>` : "";
   return `<div class="scene-nav">
-      <button type="button" class="icon" data-scene-step="-1" title="Предыдущая диаграмма" ${idx <= 0 ? "disabled" : ""}>‹</button>
-      <select id="scene-select" aria-label="Диаграммы">${opts}</select>
-      <button type="button" class="icon" data-scene-step="1" title="Следующая диаграмма" ${idx >= study.scenes.length - 1 ? "disabled" : ""}>›</button>
+      <button type="button" class="icon" data-scene-step="-1" title="Предыдущая доска ${where}" ${idx <= 0 ? "disabled" : ""}>‹</button>
+      <select id="scene-select" aria-label="Доски ${where}" title="Доски ${where}">${opts}</select>
+      <button type="button" class="icon" data-scene-step="1" title="Следующая доска ${where}" ${idx >= scope.length - 1 ? "disabled" : ""}>›</button>
+      ${allBoardsHtml()}
       <button type="button" class="icon" id="newpos-btn" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">Новая</button>
       <button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button>
     </div>
@@ -1144,6 +1145,18 @@ function studyPanelHtml() {
       <div><span class="g g-good">!</span> хороший ход · <span class="g g-mist">?</span> ошибка · <span class="g g-blun">??</span> грубая ошибка · <span class="g g-int">!?</span> интересно</div>
       <div>Отступ — побочный вариант. <span class="kbd">←</span><span class="kbd">→</span> по ходам, <span class="kbd">⇧↑</span><span class="kbd">⇧↓</span> между вариантами, правый клик по ходу — меню</div>
     </div>`;
+}
+
+// the boards the top list and its arrows go through: this chat's, or the boards without a chat — never another chat
+const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s)));
+
+// every board, grouped by chat (like «Все чаты»): picking a board of another chat opens that chat too
+function allBoardsHtml() {
+  const groups = [...ch.list.map((c) => [c.title, boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s))]]
+    .filter(([, l]) => l.length);
+  return `<select id="all-boards" class="all-boards" aria-label="Все доски" title="Все доски всех чатов: доска другого чата откроется вместе со своим чатом">
+      <option value="" selected disabled>Все доски</option>
+      ${groups.map(([t, l]) => `<optgroup label="${esc(t)}">${l.map((x) => `<option value="${esc(x.id)}">${esc(x.title)}</option>`).join("")}</optgroup>`).join("")}</select>`;
 }
 
 // a game review (coach/review.py): Stockfish's progress, then «ask Claude» and the link to the game
@@ -1202,8 +1215,9 @@ $("#panel").addEventListener("click", async (e) => {
   } else if (t.dataset.board) {
     if (t.dataset.board !== study.id) setScene(t.dataset.board);
   } else if (t.dataset.sceneStep) {
-    const i = study.scenes.indexOf(scene()) + Number(t.dataset.sceneStep);
-    if (study.scenes[i]) setScene(study.scenes[i].id);
+    const scope = scopeBoards(scene());
+    const next = scope[scope.indexOf(scene()) + Number(t.dataset.sceneStep)];
+    if (next) setScene(next.id);
   } else if (t.id === "ask-line") {
     askAboutUserLine();
   } else if (t.dataset.review !== undefined) {
@@ -1220,21 +1234,19 @@ $("#panel").addEventListener("click", async (e) => {
       setTimeout(() => { t.classList.remove("confirm"); t.textContent = "✕"; }, 3000);
       return;
     }
-    const i = study.scenes.indexOf(sc);
-    const own = boardsOf(chatOf(sc));
+    const own = scopeBoards(sc);
     const j = own.indexOf(sc);
-    study.scenes.splice(i, 1);
+    study.scenes.splice(study.scenes.indexOf(sc), 1);
     post("/api/scene/delete", { id: sc.id });
-    if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat
-    else if (chatOf(sc)) { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
-    else setScene(study.scenes[Math.min(i, study.scenes.length - 1)]?.id ?? null);
+    if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat (or without a chat)
+    else { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
   } else if (t.id === "newpos-btn" || t.id === "board-add") {
     study.newpos = !study.newpos;
     renderStudyPanel();
     if (study.newpos) $("#newpos-input")?.focus();
   }
 });
-$("#panel").addEventListener("change", (e) => { if (e.target.id === "scene-select") setScene(e.target.value); });
+$("#panel").addEventListener("change", (e) => { if (["scene-select", "all-boards"].includes(e.target.id)) setScene(e.target.value); });
 $("#panel").addEventListener("change", (e) => {
   if (e.target.id === "lp-angle" || e.target.id === "lp-diff") {
     if (e.target.id === "lp-angle") lp.angle = e.target.value; else lp.difficulty = e.target.value;
@@ -3044,8 +3056,11 @@ async function onEvent(ev) {
       const s = await http.get("/api/state");
       study.scenes = s.study.scenes;
       if (scene() || !study.id) { if (mode === "study") renderStudy(); } // nothing gone from the screen (an empty board stays empty)
-      else if (mode === "study" && chatOf({ chat: ch.cur })) { study.id = activeBoard(ch.cur)?.id ?? null; study.node = "root"; renderStudy(); }
-      else setScene(s.study.current); // the board on screen was deleted in another window
+      else { // the board on screen was deleted in another window: another board of the same chat, never another chat
+        study.id = activeBoard(chatOf({ chat: ch.cur }))?.id ?? null;
+        study.node = "root";
+        renderStudy();
+      }
       break;
     }
     case "chat_board": // the board a chat's Claude works on by default; opening that chat brings it
