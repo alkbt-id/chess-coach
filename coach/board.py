@@ -75,6 +75,33 @@ def scene(sid: str | None = None) -> dict:
     raise SceneError(f"no diagram {sid!r}" if sid else "no diagram on the board yet — create one with show")
 
 
+def find_scene(sid: str | None) -> dict | None:
+    return next((s for s in S.study["scenes"] if s["id"] == sid), None) if sid else None
+
+
+# One chat — one board: a board keeps the id of its chat in sc["chat"]; a chat has at most one board.
+def chat_scene(chat_id: str | None) -> dict | None:
+    """The board of a chat (the latest one, for chats from before the rule that made several)."""
+    if not chat_id:
+        return None
+    return next((s for s in reversed(S.study["scenes"]) if s.get("chat") == chat_id), None)
+
+
+async def bind_chat(sc: dict, chat_id: str) -> None:
+    sc["chat"] = chat_id
+    S.save_study()
+    await broadcast({"type": "scene", "scene": sc, "goto": None})
+
+
+async def unbind_chat(chat_id: str) -> None:
+    """A deleted chat leaves its boards without a chat; the next question about one starts a new chat."""
+    for sc in S.study["scenes"]:
+        if sc.get("chat") == chat_id:
+            sc.pop("chat")
+            S.save_study()
+            await broadcast({"type": "scene", "scene": sc, "goto": None})
+
+
 def resolve(sc: dict, at, create: bool = False) -> dict:
     """`at`: None/'start' | 'current' (the node the user is looking at) | node id | move path."""
     if at == "current":
@@ -102,14 +129,16 @@ def current_fen() -> str | None:
 
 # ---------------- operations ----------------
 async def op_show(b: dict) -> dict:
+    """A new board; with `chat`, that chat's board — a chat that has one already gets no second one
+    (chat.py opens a new chat for it); `from` = the chat the board was opened from."""
+    old = chat_scene(b.get("chat"))
+    if old is not None:
+        raise SceneError(f"this chat already has its board «{old['title']}» (one chat — one board)")
     S.study["seq"] += 1
     sc, first = scenes.make_scene(f"s{S.study['seq']}", b, current_fen())
-    if b.get("puzzle"):
-        sc["puzzle"] = b["puzzle"]
-    if b.get("chat"):
-        sc["chat"] = b["chat"]
-    if b.get("game"):
-        sc["game"] = b["game"]
+    for key in ("puzzle", "chat", "from", "game"):
+        if b.get(key):
+            sc[key] = b[key]
     S.study["scenes"].append(sc)
     S.study["scenes"] = S.study["scenes"][-MAX_SCENES:]
     S.study["current"] = sc["id"]

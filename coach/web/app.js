@@ -817,7 +817,7 @@ async function onStudyMove(orig, dest) {
   try {
     let sc = scene();
     if (!sc) {
-      const r = await post("/api/scene", { title: "Свободный анализ", position: START_FEN });
+      const r = await post("/api/scene", { title: "Свободный анализ", position: START_FEN, chat: claimChat() });
       await waitScene(r.scene);
       study.id = r.scene;
       study.node = "root";
@@ -891,6 +891,32 @@ function studyStep(dir) {
 function setScene(id, node = "root") {
   study.id = id;
   study.node = node;
+  study.flipped = false;
+  closePreviewSilently();
+  renderStudy();
+  followBoard();
+}
+
+// ---- one chat — one board: the board keeps its chat's id (sc.chat), a chat has at most one board.
+// In «Разбор» the chat panel shows the chat of the board on screen, and opening a chat brings its board. ----
+const chatOf = (sc) => (sc?.chat && ch.list.some((c) => c.id === sc.chat) ? sc.chat : null);
+const boardOf = (cid) => (cid ? study.scenes.findLast((s) => s.chat === cid) || null : null);
+// a board made on the empty board of a chat that has none becomes that chat's board
+const claimChat = () => (ch.cur && !boardOf(ch.cur) ? ch.cur : undefined);
+
+function followBoard() {
+  if (mode !== "study" || isLive()) return;
+  const cid = chatOf(scene());
+  if (cid !== ch.cur) openChat(cid, { follow: false });
+  else if (!cid) renderChatLog(); // its empty state names the board
+}
+
+function followChat() {
+  if (mode !== "study" || isLive()) return;
+  const id = boardOf(ch.cur)?.id ?? null;
+  if (id === study.id) return;
+  study.id = id;
+  study.node = "root";
   study.flipped = false;
   closePreviewSilently();
   renderStudy();
@@ -1021,8 +1047,11 @@ function studyPanelHtml() {
   const sc = scene();
   const newpos = `<form class="newpos" id="newpos-form"${study.newpos || !sc ? "" : " hidden"}>
       <input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
-  if (!sc) {
-    return `<div class="empty"><h2>Анализ</h2>
+  if (!sc) { // a chat without a board, or no boards yet: the list stays reachable
+    const list = study.scenes.length ? `<div class="scene-nav"><select id="scene-select" aria-label="Диаграммы">
+      <option value="" selected disabled>Пустая доска — выбрать другую</option>
+      ${study.scenes.map((x, i) => `<option value="${esc(x.id)}">${i + 1}. ${esc(x.title)}</option>`).reverse().join("")}</select></div>` : "";
+    return `${list}<div class="empty"><h2>Анализ</h2>
       <p>Здесь будут позиции и варианты, которые показывает Claude, и твои собственные ходы — как на анализе Lichess.</p>
       <p>Двигай фигуры, чтобы начать свободный анализ, или задай позицию:</p></div>${newpos}${cevalHtml()}`;
   }
@@ -1110,7 +1139,7 @@ $("#panel").addEventListener("click", async (e) => {
     if (t.dataset.review) openReview(t.dataset.review);
   } else if (t.id === "review-ask") {
     const sc = scene();
-    if (sc) sendToChat(claudeReviewText(sc));
+    if (sc) sendToChat(claudeReviewText(sc), sc);
   } else if (t.id === "scene-del") {
     const sc = scene();
     if (!sc) return;
@@ -1143,7 +1172,7 @@ $("#panel").addEventListener("submit", async (e) => {
   e.preventDefault();
   const v = $("#newpos-input").value.trim();
   try {
-    const r = await post("/api/scene", { title: "Новая позиция", position: v || "start" });
+    const r = await post("/api/scene", { title: "Новая позиция", position: v || "start", chat: claimChat() });
     study.newpos = false;
     await waitScene(r.scene);
     setScene(r.scene);
@@ -2029,7 +2058,10 @@ function renderChatLog() {
   const log = $("#chat-log");
   const c = curChat();
   if (!c) {
-    log.innerHTML = `<div class="chat-empty"><h3>Чат с Claude</h3><p>Claude видит доску, считает Stockfish, показывает варианты и стрелки, разбирает партии и составляет задачи.</p>${quickHtml()}</div>`;
+    const sc = mode === "study" ? scene() : null;
+    log.innerHTML = sc
+      ? `<div class="chat-empty"><h3>Чат доски «${esc(sc.title)}»</h3><p>У этой доски пока нет чата. Спроси Claude — разговор останется с этой доской: выберешь её снова, и откроется он.</p></div>`
+      : `<div class="chat-empty"><h3>Чат с Claude</h3><p>Claude видит доску, считает Stockfish, показывает варианты и стрелки, разбирает партии и составляет задачи.</p>${quickHtml()}</div>`;
     updateSendButton();
     return;
   }
@@ -2052,7 +2084,8 @@ function updateSendButton() {
 
 function renderChat() { renderChatTabs(); renderChatOpts(); renderChatLog(); }
 
-async function openChat(id) {
+// follow: in «Разбор» the board follows the chat (its board, or an empty one for a chat without a board)
+async function openChat(id, { follow = true } = {}) {
   if (id && closedChats.delete(id)) saveClosed();
   ch.cur = id;
   ch.delConfirm = false;
@@ -2061,14 +2094,16 @@ async function openChat(id) {
   }
   try { localStorage.setItem("chat.cur", id || ""); } catch {}
   renderChat();
+  if (follow) followChat();
 }
 
-async function newChat() {
+// board: the chat is made for this board (the server returns the board's own chat if it has one)
+async function newChat(board = null) {
   const c = curChat();
-  const meta = await post("/api/chat", { model: c?.model, effort: c?.effort });
+  const meta = await post("/api/chat", { model: c?.model, effort: c?.effort, scene: board?.id });
   ch.list = [meta, ...ch.list.filter((x) => x.id !== meta.id)];
-  ch.entries.set(meta.id, []);
-  await openChat(meta.id);
+  if (board) board.chat = meta.id; // the server's scene event confirms it
+  await openChat(meta.id, { follow: !board });
   $("#chat-text").focus();
   return meta;
 }
@@ -2076,23 +2111,42 @@ async function newChat() {
 async function sendChat(text) {
   text = text.trim();
   if (!text) return;
-  if (!curChat()) await newChat();
+  if (!curChat()) await newChat(mode === "study" ? scene() : null);
   $("#chat-text").value = "";
   autosize();
   updateSendButton();
   await post(`/api/chat/${ch.cur}/send`, { text }).catch((err) => setStatus(String(err.message), true));
 }
 
-async function sendToChat(text) {
+// a message about a board goes to that board's chat (made on first use), even when it is not on screen
+async function sendToChat(text, sc = mode === "study" ? scene() : null) {
   if (isLive()) return; // no Claude during a live game
   setChatOpen(true);
-  if (!curChat()) await newChat();
-  await post(`/api/chat/${ch.cur}/send`, { text }).catch((err) => setStatus(String(err.message), true));
+  let cid;
+  try {
+    if (sc && sc.id === study.id && mode === "study") {
+      if (!chatOf(sc)) await newChat(sc); else if (ch.cur !== sc.chat) await openChat(sc.chat, { follow: false });
+      cid = ch.cur;
+    } else if (sc) {
+      cid = chatOf(sc);
+      if (!cid) {
+        const meta = await post("/api/chat", { scene: sc.id, model: curChat()?.model, effort: curChat()?.effort });
+        ch.list = [meta, ...ch.list.filter((x) => x.id !== meta.id)];
+        sc.chat = cid = meta.id;
+      }
+    } else {
+      if (!curChat()) await newChat();
+      cid = ch.cur;
+    }
+    await post(`/api/chat/${cid}/send`, { text });
+  } catch (err) { setStatus(String(err.message), true); }
 }
 
 function askClaude(text) {
   if (isLive()) return;
   setChatOpen(true);
+  // a puzzle is a new topic: not into a chat that has its own board (Claude's show there would be refused)
+  if (mode !== "study" && boardOf(ch.cur)) openChat(null, { follow: false });
   const ta = $("#chat-text");
   ta.value = text;
   autosize();
@@ -2161,7 +2215,8 @@ $("#chat-del").addEventListener("click", async () => {
   await post(`/api/chat/${id}/delete`);
   ch.entries.delete(id);
   ch.list = ch.list.filter((c) => c.id !== id);
-  openChat(ch.list[0]?.id || null);
+  // in «Разбор» the board stays, now without a chat; elsewhere the next chat opens
+  openChat(mode === "study" ? null : ch.list[0]?.id || null, { follow: false });
 });
 $("#chat-toggle").addEventListener("click", () => setChatOpen(!ch.open));
 
@@ -2169,7 +2224,7 @@ let deltaFrame = null;
 function onChatEvent(ev) {
   if (ev.type === "chat_list") {
     ch.list = ev.chats;
-    if (ch.cur && !ch.list.some((c) => c.id === ch.cur)) ch.cur = ch.list[0]?.id || null;
+    if (ch.cur && !ch.list.some((c) => c.id === ch.cur)) ch.cur = mode === "study" ? null : ch.list[0]?.id || null;
     renderChatTabs();
     renderChatOpts();
     const log = $("#chat-log");
@@ -2666,7 +2721,7 @@ function claudeReviewText(sc) {
 function checkPendingClaude(sc) {
   if (sc?.review?.state === "done" && pendingClaude.has(sc.id)) {
     pendingClaude.delete(sc.id);
-    sendToChat(claudeReviewText(sc));
+    sendToChat(claudeReviewText(sc), sc);
   }
 }
 
@@ -2679,7 +2734,7 @@ async function openReview(gameId, withClaude = false) {
   study.id = r.scene;
   study.node = "root";
   if (withClaude) pendingClaude.set(r.scene, true);
-  if (mode !== "study") setMode("study"); else renderStudy();
+  if (mode !== "study") setMode("study", { follow: "board" }); else { renderStudy(); followBoard(); }
   checkPendingClaude(scene());
 }
 
@@ -2785,7 +2840,9 @@ function updateCounts() {
   $("#due-count").textContent = due ? `· ${due}` : "";
 }
 
-function setMode(m, { save = true } = {}) {
+// follow: which side wins when «Разбор» opens — "board" (a board was just chosen: its chat comes) or, by default,
+// the open chat if it has a board (its board comes), else the board on screen
+function setMode(m, { save = true, follow = "chat" } = {}) {
   if (isLive() && m !== "play") return; // during a live game only the game is on screen
   closePromotion();
   closePreviewSilently();
@@ -2795,7 +2852,10 @@ function setMode(m, { save = true } = {}) {
   $("#engine-switch").style.visibility = m === "study" ? "visible" : "hidden";
   $("#ask-switch").style.visibility = m === "study" ? "visible" : "hidden";
   $("#foot").hidden = m === "puzzle"; // nothing left there for puzzles (the flip button sits under the board)
-  if (m === "study") renderStudy(); else if (m === "play") renderPlay(); else renderPuzzle();
+  if (m === "study") {
+    renderStudy();
+    if (follow === "chat" && boardOf(ch.cur)) followChat(); else followBoard();
+  } else if (m === "play") renderPlay(); else renderPuzzle();
   if (save) http.send("PUT", "/api/settings", { mode: m }).catch(() => {});
 }
 
@@ -2865,24 +2925,27 @@ async function onEvent(ev) {
     case "scene":
       upsertScene(ev.scene);
       checkPendingClaude(ev.scene);
-      if (ev.goto && !isLive()) {
+      // a chat working in the background does not take the board away from the chat the user is in
+      if (ev.goto && !isLive() && (!chatOf(ev.scene) || [ev.scene.chat, ev.scene.from].includes(ch.cur) || ev.scene.id === study.id)) {
         closePreviewSilently();
         study.id = ev.scene.id;
         study.node = ev.goto;
-        if (mode !== "study") setMode("study", { save: false }); else renderStudy();
+        if (mode !== "study") setMode("study", { save: false, follow: "board" }); else { renderStudy(); followBoard(); }
       } else if (mode === "study" && study.id === ev.scene.id && ev.origin !== CLIENT) {
         if (!tindex(ev.scene).has(study.node)) study.node = "root";
         renderStudy();
       }
       updateCounts();
       break;
-    case "goto":
-      if (isLive()) break;
+    case "goto": {
+      const sc = study.scenes.find((s) => s.id === ev.scene);
+      if (isLive() || (chatOf(sc) && sc.chat !== ch.cur && sc.id !== study.id)) break;
       closePreviewSilently();
       study.id = ev.scene;
       study.node = ev.node;
-      if (mode !== "study") setMode("study", { save: false }); else renderStudy();
+      if (mode !== "study") setMode("study", { save: false, follow: "board" }); else { renderStudy(); followBoard(); }
       break;
+    }
     case "scenes": {
       const s = await http.get("/api/state");
       study.scenes = s.study.scenes;
@@ -2975,7 +3038,7 @@ async function init() {
       if (closedChats.size) saveClosed();
     }
     const openList = ch.list.filter((c) => !closedChats.has(c.id));
-    await openChat(openList.some((c) => c.id === saved) ? saved : openList[0]?.id || null);
+    await openChat(openList.some((c) => c.id === saved) ? saved : openList[0]?.id || null, { follow: false }); // in «Разбор» setMode brings the board's chat
     renderJobChip();
     setMode(isLive() ? "play" : ["study", "play"].includes(s.settings.mode) ? s.settings.mode : "puzzle", { save: false });
   } catch (e) {

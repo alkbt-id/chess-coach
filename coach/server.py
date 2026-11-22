@@ -242,8 +242,16 @@ async def play(request: Request):
 # ---------------- chats ----------------
 @guarded
 async def chat_new(request: Request):
+    """A new chat; with `scene`, the chat of that board (one chat — one board): its own chat if it has one."""
     b = await body(request)
+    sc = board.find_scene(b.get("scene"))
+    if b.get("scene") and sc is None:
+        return err("no such board", 404)
+    if sc and sc.get("chat") in CHATS.chats:
+        return JSONResponse(CHATS.chats[sc["chat"]].meta())
     chat = await CHATS.create(b.get("model"), b.get("effort"))
+    if sc:
+        await board.bind_chat(sc, chat.id)
     return JSONResponse(chat.meta())
 
 
