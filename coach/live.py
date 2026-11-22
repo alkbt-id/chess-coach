@@ -5,6 +5,11 @@ The Lichess login is the app's one account link in coach/lichess.py (OAuth in th
 token needs the `board:play` scope. One account event stream reports games starting and ending; each
 live game has its own stream of moves and clocks.
 
+Only games the app itself started (a seek or a game vs the computer) are followed. A game the user
+starts elsewhere — on lichess.org, in the phone app — is left alone: the window does not switch to it
+and nothing is locked. The ids of the app's games are kept in app/live_games.json, so a restart in
+the middle of such a game picks it up again.
+
 Fair play: Lichess forbids any outside help during a game. While a real-time game is on, `S.lock`
 holds a message and everything that could help is refused: Stockfish, the analysis board, puzzle
 explanations, Claude's board tools and new chat messages (server.py, board.py, chat.py). Busy Claude
@@ -20,6 +25,7 @@ import chess
 import httpx
 
 from .board import S, broadcast
+from .config import DATA
 from .lichess import ACCOUNT, API, HEADERS, token
 from .lichess import why as _why
 from .scenes import num_label
@@ -30,6 +36,16 @@ SEEK_PRESETS = [[10, 0], [10, 5], [15, 10], [30, 0], [30, 20]]
 AI_PRESETS = [[5, 3], [10, 0], [10, 5], [15, 10], [30, 0]]
 LOCK = ("Идёт партия на Lichess: анализ, Stockfish и Claude выключены до её конца — "
         "правила Lichess запрещают любую помощь во время партии.")
+MINE_FILE = DATA / "live_games.json"  # ids of the games the app started
+EXPECT_S = 15.0  # after a seek closes or a computer game is asked for, its start may come this late
+
+
+def _load_mine() -> list[str]:
+    try:
+        ids = json.loads(MINE_FILE.read_text())
+        return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+    except (OSError, ValueError):
+        return []
 
 
 class LiveError(ValueError):
@@ -41,7 +57,7 @@ class Game:
         self.id: str = info.get("gameId") or info["id"]
         self.color: str = info.get("color") or "white"
         self.speed: str = info.get("speed") or ""
-        # a game the Board API cannot play (e.g. blitz started on the site): the user plays it on lichess.org
+        # a game the Board API cannot play: the user plays it on lichess.org
         self.board_ok: bool = (info.get("compat") or {}).get("board", True)
         self.opponent: dict = info.get("opponent") or {}
         self.rated = bool(info.get("rated"))
@@ -129,7 +145,29 @@ class Live:
         self.stream_ok = False
         self.error = ""
         self.was_live = False
+        self.mine: list[str] = _load_mine()
+        self.expect_until = 0.0  # till then a game the event stream reports is one the app asked for
         self._http: httpx.AsyncClient | None = None
+
+    def _remember(self, gid: str) -> None:
+        if gid in self.mine:
+            return
+        self.mine = [*self.mine, gid][-30:]
+        with contextlib.suppress(OSError):
+            MINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = MINE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.mine))
+            tmp.replace(MINE_FILE)
+
+    def _ours(self, gid: str) -> bool:
+        """A game the app started: known, or reported while the app waits for its seek or computer game."""
+        if gid in self.games or gid in self.mine:
+            return True
+        if self.seek or time.time() < self.expect_until:
+            self.expect_until = 0.0  # one request, one game
+            self._remember(gid)
+            return True
+        return False
 
     # ---------------- plumbing ----------------
     def http(self) -> httpx.AsyncClient:
@@ -250,8 +288,8 @@ class Live:
         if not gid:
             return
         if t == "gameStart":
-            if info.get("speed") == "correspondence":
-                return
+            if info.get("speed") == "correspondence" or not self._ours(gid):
+                return  # a game started elsewhere (lichess.org, the phone app): not the app's business
             g = self.games.get(gid)
             if g is None:
                 g = self.games[gid] = Game(info)
@@ -350,6 +388,8 @@ class Live:
                 else:
                     async for _ in r.aiter_lines():
                         pass
+                    if not any(g.started * 1000 >= sk["since"] for g in self.games.values()):
+                        self.expect_until = time.time() + EXPECT_S  # the game's start is still on its way
                     await asyncio.sleep(2)  # the closed seek means a game: its start comes on the event stream
                     if not any(g.started * 1000 >= sk["since"] for g in self.games.values()):
                         why = "Соперник не нашёлся — попробуй ещё раз"
@@ -383,10 +423,20 @@ class Live:
             raise LiveError("партия уже идёт")
         await self.cancel_seek(emit=False)
         await self._ensure_events()
-        r = await self.http().post("/api/challenge/ai", headers=self.bearer(), data={
-            "level": int(level), "clock.limit": minutes * 60, "clock.increment": inc, "color": color, "variant": "standard"})
+        self.expect_until = time.time() + EXPECT_S  # the game's start may come on the event stream before the answer
+        try:
+            r = await self.http().post("/api/challenge/ai", headers=self.bearer(), data={
+                "level": int(level), "clock.limit": minutes * 60, "clock.increment": inc, "color": color, "variant": "standard"})
+        except httpx.HTTPError:
+            self.expect_until = 0.0
+            raise
         if r.status_code not in (200, 201):
+            self.expect_until = 0.0
             raise LiveError(_why(r))
+        with contextlib.suppress(ValueError, AttributeError):
+            if gid := r.json().get("id"):
+                self._remember(gid)
+                self.expect_until = 0.0  # its id is known now: no other game is taken for it
         self.error = ""
 
     # ---------------- during the game ----------------
