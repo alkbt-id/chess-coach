@@ -1109,29 +1109,19 @@ function studyPanelHtml() {
   const newpos = `<form class="newpos" id="newpos-form"${study.newpos || !sc ? "" : " hidden"}>
       <input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
   if (!sc) { // a chat without a board, or no boards yet: every board stays reachable
-    const list = study.scenes.length ? `<div class="scene-nav">${allBoardsHtml()}</div>` : "";
+    const list = study.scenes.length ? `<div class="board-tabs"><span class="bt-end">${allBoardsHtml()}</span></div>` : "";
     return `${list}<div class="empty"><h2>Анализ</h2>
       <p>Здесь будут позиции и варианты, которые показывает Claude, и твои собственные ходы — как на анализе Lichess.</p>
       <p>Двигай фигуры, чтобы начать свободный анализ, или задай позицию:</p></div>${newpos}${cevalHtml()}`;
   }
-  const scope = scopeBoards(sc);
-  const idx = scope.indexOf(sc);
-  const opts = scope.map((x, i) => `<option value="${esc(x.id)}"${x === sc ? " selected" : ""}>${i + 1}. ${esc(x.title)}</option>`).reverse().join("");
-  const where = chatOf(sc) ? "этого чата" : "без чата";
-  const own = boardsOf(chatOf(sc));
-  // always shown for a chat's board, so the way to add a second board is in sight
-  const tabs = own.length ? `<div class="board-tabs" role="tablist" aria-label="Доски этого чата"><span class="bt-label">Доски чата:</span>
-      ${own.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
-      <button type="button" class="btab add" id="board-add" title="Ещё одна доска в этом чате: начальная позиция, FEN или ходы">＋ доска</button></div>` : "";
-  return `<div class="scene-nav">
-      <button type="button" class="icon" data-scene-step="-1" title="Предыдущая доска ${where}" ${idx <= 0 ? "disabled" : ""}>‹</button>
-      <select id="scene-select" aria-label="Доски ${where}" title="Доски ${where}">${opts}</select>
-      <button type="button" class="icon" data-scene-step="1" title="Следующая доска ${where}" ${idx >= scope.length - 1 ? "disabled" : ""}>›</button>
-      ${allBoardsHtml()}
-      <button type="button" class="icon" id="newpos-btn" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">Новая</button>
-      <button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button>
-    </div>
-    ${tabs}
+  // one row: the tabs of this chat's boards (or of the boards without a chat) — switching them never changes the chat;
+  // «Все доски» reaches every board, and a board of another chat comes with its chat
+  const where = chatOf(sc) ? "чата" : "без чата";
+  const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски ${where}"><span class="bt-label">Доски ${where}:</span>
+      ${scopeBoards(sc).map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
+      <button type="button" class="btab add" id="board-add" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">＋ доска</button>
+      <span class="bt-end">${allBoardsHtml()}<button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button></span></div>`;
+  return `${tabs}
     ${newpos}
     <h1 class="title">${esc(sc.title)}</h1>
     ${reviewHtml(sc)}
@@ -1147,7 +1137,7 @@ function studyPanelHtml() {
     </div>`;
 }
 
-// the boards the top list and its arrows go through: this chat's, or the boards without a chat — never another chat
+// the boards the tabs show: this chat's, or the boards without a chat — never another chat
 const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s)));
 
 // every board, grouped by chat (like «Все чаты»): picking a board of another chat opens that chat too
@@ -1214,10 +1204,6 @@ $("#panel").addEventListener("click", async (e) => {
     if (l) openPreview(playLine(ceval.res.fen, l.uci), Number(t.dataset.i), "Линия Stockfish");
   } else if (t.dataset.board) {
     if (t.dataset.board !== study.id) setScene(t.dataset.board);
-  } else if (t.dataset.sceneStep) {
-    const scope = scopeBoards(scene());
-    const next = scope[scope.indexOf(scene()) + Number(t.dataset.sceneStep)];
-    if (next) setScene(next.id);
   } else if (t.id === "ask-line") {
     askAboutUserLine();
   } else if (t.dataset.review !== undefined) {
@@ -1240,13 +1226,13 @@ $("#panel").addEventListener("click", async (e) => {
     post("/api/scene/delete", { id: sc.id });
     if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat (or without a chat)
     else { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
-  } else if (t.id === "newpos-btn" || t.id === "board-add") {
+  } else if (t.id === "board-add") {
     study.newpos = !study.newpos;
     renderStudyPanel();
     if (study.newpos) $("#newpos-input")?.focus();
   }
 });
-$("#panel").addEventListener("change", (e) => { if (["scene-select", "all-boards"].includes(e.target.id)) setScene(e.target.value); });
+$("#panel").addEventListener("change", (e) => { if (e.target.id === "all-boards") setScene(e.target.value); });
 $("#panel").addEventListener("change", (e) => {
   if (e.target.id === "lp-angle" || e.target.id === "lp-diff") {
     if (e.target.id === "lp-angle") lp.angle = e.target.value; else lp.difficulty = e.target.value;

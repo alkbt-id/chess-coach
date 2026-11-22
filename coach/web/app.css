@@ -146,10 +146,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .preview .num { color: var(--muted); }
 
 /* ---------- study ---------- */
-.scene-nav { display: flex; align-items: center; gap: 4px; }
-.scene-nav select { flex: 1; min-width: 0; font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
-.scene-nav .icon { min-width: 28px; height: 26px; padding: 0 6px; }
-.scene-nav select.all-boards { flex: none; width: 100px; color: var(--muted); }
 h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balance; }
 /* tabs of the open chat's boards (a chat keeps several, each with its own tree) */
 .board-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
@@ -158,6 +154,9 @@ h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balanc
 .btab:hover { color: var(--ink); }
 .btab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; cursor: default; }
 .btab.add { background: none; border-style: dashed; color: var(--accent); }
+.bt-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.bt-end .icon { min-width: 28px; height: 26px; padding: 0 6px; }
+select.all-boards { width: 100px; font-size: 12px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
 .lead { font-size: 14px; }
 .newpos { display: flex; gap: 6px; }
 .newpos input { flex: 1; min-width: 0; font: 12px var(--font-mono); padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
