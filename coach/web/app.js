@@ -1119,8 +1119,10 @@ function studyPanelHtml() {
   const idx = study.scenes.indexOf(sc);
   const opts = study.scenes.map((x, i) => `<option value="${esc(x.id)}"${x === sc ? " selected" : ""}>${i + 1}. ${esc(x.title)}</option>`).reverse().join("");
   const own = boardsOf(chatOf(sc));
-  const tabs = own.length > 1 ? `<div class="board-tabs" role="tablist" aria-label="Доски этого чата"><span class="bt-label">Доски чата:</span>
-      ${own.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}</div>` : "";
+  // always shown for a chat's board, so the way to add a second board is in sight
+  const tabs = own.length ? `<div class="board-tabs" role="tablist" aria-label="Доски этого чата"><span class="bt-label">Доски чата:</span>
+      ${own.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
+      <button type="button" class="btab add" id="board-add" title="Ещё одна доска в этом чате: начальная позиция, FEN или ходы">＋ доска</button></div>` : "";
   return `<div class="scene-nav">
       <button type="button" class="icon" data-scene-step="-1" title="Предыдущая диаграмма" ${idx <= 0 ? "disabled" : ""}>‹</button>
       <select id="scene-select" aria-label="Диаграммы">${opts}</select>
@@ -1128,8 +1130,8 @@ function studyPanelHtml() {
       <button type="button" class="icon" id="newpos-btn" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">Новая</button>
       <button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button>
     </div>
-    ${newpos}
     ${tabs}
+    ${newpos}
     <h1 class="title">${esc(sc.title)}</h1>
     ${reviewHtml(sc)}
     ${cevalHtml()}
@@ -1226,7 +1228,7 @@ $("#panel").addEventListener("click", async (e) => {
     if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat
     else if (chatOf(sc)) { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
     else setScene(study.scenes[Math.min(i, study.scenes.length - 1)]?.id ?? null);
-  } else if (t.id === "newpos-btn") {
+  } else if (t.id === "newpos-btn" || t.id === "board-add") {
     study.newpos = !study.newpos;
     renderStudyPanel();
     if (study.newpos) $("#newpos-input")?.focus();
