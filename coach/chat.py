@@ -32,7 +32,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import board, config, jobs
+from . import board, config, jobs, repertoire
 from .board import DATA, S, broadcast, load_json, save_json
 from .config import ROOT
 from .scenes import SceneError
@@ -281,7 +281,8 @@ def make_tools(chat_id: str):
             return _ok(j.public(40)) if j else _err("no such job")
         return _ok([j.public() for j in jobs.JOBS.values()])
 
-    return create_sdk_mcp_server("board", tools=[board_state, show, add_line, annotate, goto, edit, analyse, puzzles, run_job, job_status])
+    return create_sdk_mcp_server("board", tools=[board_state, show, add_line, annotate, goto, edit, analyse, puzzles, run_job, job_status,
+                                                 *repertoire.tools(chat_id)])
 
 
 # ---------------- chats ----------------
@@ -389,6 +390,9 @@ class ChatManager:
             return
         if chat.busy or chat.waiting:
             chat.closing = True
+        elif repertoire.REP.notes_due(chat) and not S.lock:  # a lesson: Claude updates its notes, then stops
+            await repertoire.REP.ask_notes(chat)
+            chat.closing = True
         else:
             await self._stop_worker(chat)
 
@@ -485,7 +489,8 @@ class ChatManager:
             cwd=str(ROOT),
             add_dirs=[str(config.HOME)],  # the user's data lives outside the project (coach/config.py)
             resume=chat.session_id,
-            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND.replace("<<USER>>", user_line()).replace("<<HOME>>", str(config.HOME))},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND.replace("<<USER>>", user_line()).replace("<<HOME>>", str(config.HOME))
+                                                                   + repertoire.REP.prompt(chat.id)},
             setting_sources=["user", "project", "local"],
             mcp_servers={"board": make_tools(chat.id)},
             allowed_tools=["mcp__board", "Read", "Glob", "Grep", "TodoWrite"],

@@ -18,13 +18,14 @@
 <link rel="stylesheet" href="/static/vendor/board.lichess-brown.css">
 <link rel="stylesheet" href="/static/vendor/pieces.merida.css">
 <!-- ?v=: the iPad keeps static files cached; bump it (here and on app.js below) when app.css or app.js changes -->
-<link rel="stylesheet" href="/static/app.css?v=14">
+<link rel="stylesheet" href="/static/app.css?v=15">
 </head>
 <body>
 <div class="app">
   <header class="top">
     <div class="modes" role="tablist" aria-label="Режим">
       <button type="button" class="mode" role="tab" data-mode="study" aria-selected="false">Разбор <small id="scene-count"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="rep" aria-selected="false" title="Мой дебютный репертуар: разделы, уроки с Claude">Репертуар</button>
       <button type="button" class="mode" role="tab" data-mode="puzzle" aria-selected="false">Задачи <small id="due-count"></small></button>
       <button type="button" class="mode" role="tab" data-mode="play" aria-selected="false" title="Партии на Lichess">Игра <small id="play-count"></small></button>
     </div>
@@ -89,6 +90,6 @@
 <div class="ctx" id="ctx" hidden></div>
 <div class="pop" id="jobs-pop" hidden></div>
 <div class="pop" id="chats-pop" hidden></div>
-<script type="module" src="/static/app.js?v=15"></script>
+<script type="module" src="/static/app.js?v=16"></script>
 </body>
 </html>

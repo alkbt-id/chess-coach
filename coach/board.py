@@ -66,9 +66,23 @@ async def broadcast(event: dict) -> None:
         q.put_nowait(event)
 
 
+# Boards kept outside scenes.json — the repertoire's two trees (coach/repertoire.py registers itself here):
+# found by id, saved with their own file, and a move under which a repertoire section starts cannot be deleted.
+EXTERNAL = {"find": lambda sid: None, "save": lambda sc: None, "guard_delete": lambda sc, node_id: None}
+
+
+def save_scene(sc: dict) -> None:
+    if sc.get("rep"):
+        EXTERNAL["save"](sc)
+    else:
+        S.save_study()
+
+
 # ---------------- helpers ----------------
 def scene(sid: str | None = None) -> dict:
     sid = sid or S.view.get("sceneId") or S.study["current"]
+    if (ext := EXTERNAL["find"](sid)) is not None:
+        return ext
     for s in S.study["scenes"]:
         if s["id"] == sid:
             return s
@@ -76,6 +90,8 @@ def scene(sid: str | None = None) -> dict:
 
 
 def find_scene(sid: str | None) -> dict | None:
+    if (ext := EXTERNAL["find"](sid)) is not None:
+        return ext
     return next((s for s in S.study["scenes"] if s["id"] == sid), None) if sid else None
 
 
@@ -117,6 +133,8 @@ async def note_view(prev_sid: str | None, sid: str | None) -> None:
 
 
 async def bind_chat(sc: dict, chat_id: str) -> None:
+    if sc.get("rep"):  # a repertoire tree belongs to no chat (its lessons are chats of its sections)
+        return
     sc["chat"] = chat_id
     S.save_study()
     await broadcast({"type": "scene", "scene": sc, "goto": None})
@@ -197,7 +215,7 @@ async def op_add_line(b: dict) -> dict:
     start = resolve(sc, b.get("at"), create=True)
     nodes = scenes.add_moves(sc, start, b.get("moves") or [], by=b.get("by", "claude"), title=b.get("title") or "",
                              comment=b.get("comment") or "", shapes=b.get("shapes"))
-    S.save_study()
+    save_scene(sc)
     target = nodes[0] if nodes else start
     if b.get("goto") == "end" and nodes:
         target = nodes[-1]
@@ -217,7 +235,7 @@ async def op_annotate(b: dict) -> dict:
         node["shapes"] = (node.get("shapes", []) + new) if b.get("append") else new
     if "glyph" in b and node["id"] != "root":
         scenes.set_glyph(node, b.get("glyph") or "")
-    S.save_study()
+    save_scene(sc)
     await broadcast({"type": "scene", "scene": sc, "goto": node["id"] if b.get("goto", True) else None})
     return {"ok": True, **node_info(sc, node)}
 
@@ -238,10 +256,12 @@ async def op_edit(b: dict) -> dict:
     if action == "promote":
         scenes.promote(sc, node["id"])
     elif action == "delete":
+        if sc.get("rep"):
+            EXTERNAL["guard_delete"](sc, node["id"])
         goto = scenes.delete(sc, node["id"])["id"]
     else:
         raise SceneError("action must be 'promote' or 'delete'")
-    S.save_study()
+    save_scene(sc)
     await broadcast({"type": "scene", "scene": sc, "goto": goto})
     return {"ok": True, "tree": tree_text(sc)}
 
@@ -251,12 +271,14 @@ async def op_user_move(b: dict) -> dict:
     sc = scene(b.get("scene"))
     parent = scenes.find(sc, b.get("at") or "root")
     nodes = scenes.add_moves(sc, parent, [b["uci"]], by="user")
-    S.save_study()
+    save_scene(sc)
     await broadcast({"type": "scene", "scene": sc, "goto": None, "origin": b.get("client")})
     return {"ok": True, "node": nodes[0]["id"], "scene": sc}
 
 
 async def op_delete_scene(b: dict) -> dict:
+    if EXTERNAL["find"](b.get("id")) is not None:
+        raise SceneError("a repertoire tree cannot be deleted")
     S.study["scenes"] = [s for s in S.study["scenes"] if s["id"] != b.get("id")]
     if S.study["current"] == b.get("id"):
         S.study["current"] = S.study["scenes"][-1]["id"] if S.study["scenes"] else None
@@ -335,6 +357,7 @@ def op_summary(_: dict | None = None) -> dict:
             sc = scene(v.get("sceneId"))
             node = resolve(sc, "current")
             out["study"] = {
+                **({"repertoire_tree": sc["rep"], "repertoire_section": v.get("section")} if sc.get("rep") else {}),
                 "scene": sc["id"],
                 "title": sc["title"],
                 "start_fen": sc["root"]["fen"],

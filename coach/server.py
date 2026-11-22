@@ -22,7 +22,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import board, explain, jobs, lan, lichess, live, review
+from . import board, explain, jobs, lan, lichess, live, repertoire, review
 from .lichess_puzzles import LP, THEME_RU, pick_weak, weak_themes
 from .board import DATA, S, broadcast, save_json
 from .chat import CHATS, EFFORTS, MODELS
@@ -77,7 +77,7 @@ async def state(_: Request):
         "settings": S.settings, "study": S.study, "progress": S.progress,
         "chats": CHATS.listing(), "models": MODELS, "efforts": EFFORTS,
         "jobs": [j.public() for j in jobs.JOBS.values()], "job_kinds": jobs.KINDS,
-        "live": live.L.public(),
+        "live": live.L.public(), "rep": repertoire.REP.public(),
     })
 
 
@@ -110,8 +110,9 @@ async def view(request: Request):
     prev = S.view.get("sceneId")
     S.view = await body(request)
     S.view["at"] = int(time.time() * 1000)
-    if S.view.get("mode") in ("study", "puzzle", "play") and S.view["mode"] != S.settings.get("mode"):
-        S.settings["mode"] = S.view["mode"]
+    m = "rep" if S.view.get("rep") else S.view.get("mode")  # «Репертуар» is «Разбор» with the repertoire on (app.js)
+    if m in ("study", "puzzle", "play", "rep") and m != S.settings.get("mode"):
+        S.settings["mode"] = m
         S.save_settings()
     if S.view.get("sceneId"):
         S.study["current"] = S.view["sceneId"]
@@ -503,6 +504,7 @@ async def lifespan(_: Starlette):
     with contextlib.suppress(Exception):  # an old board without its moves before only keeps them unclickable
         board.backfill_history()
     await live.L.start()
+    repertoire.REP.start()
     yield
     await live.L.close()
     for chat in list(CHATS.chats.values()):
@@ -561,6 +563,7 @@ app = Starlette(
         Route("/api/lpuzzle/solve", lpuzzle_solve, methods=["POST"]),
         Route("/api/lpuzzle/explain", lpuzzle_explain, methods=["POST"]),
         Route("/api/job/{jid}/stop", job_stop, methods=["POST"]),
+        *repertoire.ROUTES,
         Mount("/static", StaticFiles(directory=WEB), name="static"),
     ],
     lifespan=lifespan,
