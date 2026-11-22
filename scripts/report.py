@@ -1,4 +1,4 @@
-"""Summarise data/analysis/moves.jsonl: accuracy, error counts by phase and clock,
+"""Summarise analysis/moves.jsonl of the data folder (coach/config.py): accuracy, error counts by phase and clock,
 thrown games, unpunished opponent errors."""
 
 import collections
@@ -9,10 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from coach.config import NO_USER, lichess_user
+from coach.config import GAMES, MOVES, NO_USER, lichess_user
 
-MOVES = ROOT / "data/analysis/moves.jsonl"
-GAMES = ROOT / "data/lichess/games.ndjson"
 USER = lichess_user() or sys.exit(NO_USER)
 
 # Lichess thresholds, in win-percent points lost by one move.

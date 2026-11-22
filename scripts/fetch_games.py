@@ -1,7 +1,7 @@
-"""Download the user's games played since the last one in data/lichess/games.ndjson
+"""Download the user's games played since the last one in lichess/games.ndjson of the data folder
 (Lichess public API, no token) and refresh the profile.
 
-Output: appends to data/lichess/games.ndjson, rewrites data/lichess/profile.json.
+Output: appends to lichess/games.ndjson, rewrites lichess/profile.json (data folder: coach/config.py).
 """
 
 import json
@@ -11,10 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from coach.config import NO_USER, lichess_user
+from coach.config import GAMES, NO_USER, PROFILE, lichess_user
 
-GAMES = ROOT / "data/lichess/games.ndjson"
-PROFILE = ROOT / "data/lichess/profile.json"
 USER = lichess_user() or sys.exit(NO_USER)
 API = "https://lichess.org/api"
 HEADERS = {"User-Agent": "chess-coach-local/0.1"}
@@ -38,6 +36,7 @@ def main():
            "&clocks=true&accuracy=true&pgnInJson=true")
     new = [json.loads(l) for l in get(url, "application/x-ndjson").decode().splitlines() if l.strip()]
     new = [g for g in new if g["id"] not in known]
+    GAMES.parent.mkdir(parents=True, exist_ok=True)
     with GAMES.open("a") as f:
         for g in sorted(new, key=lambda g: g["createdAt"]):
             f.write(json.dumps(g, ensure_ascii=False) + "\n")

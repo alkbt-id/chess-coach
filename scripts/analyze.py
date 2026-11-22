@@ -1,7 +1,7 @@
 """Run Stockfish over every move of the user's rated standard games.
 
-Input:  data/lichess/games.ndjson (Lichess API export)
-Output: data/analysis/moves.jsonl — one line per ply with eval before/after,
+Input:  lichess/games.ndjson of the data folder (Lichess API export; data folder: coach/config.py)
+Output: analysis/moves.jsonl — one line per ply with eval before/after,
         best move and the player's win-chance loss.
 """
 
@@ -17,10 +17,9 @@ import chess.engine
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from coach.config import NO_USER, lichess_user, stockfish
+from coach.config import GAMES, NO_USER, lichess_user, stockfish
+from coach.config import MOVES as OUT
 
-GAMES = ROOT / "data/lichess/games.ndjson"
-OUT = ROOT / "data/analysis/moves.jsonl"
 USER = lichess_user() or sys.exit(NO_USER)
 STOCKFISH = stockfish()
 NODES = 400_000

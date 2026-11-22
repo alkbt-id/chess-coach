@@ -33,7 +33,7 @@ open ~/Applications/Шахматный\ тренер.app
 
 Чтобы приложение знало, чьи партии разбирать, войдите в Lichess в приложении (вкладка «Игра»). Больше ничего настраивать не нужно.
 
-Остальное — по желанию: скопируйте [config.example.toml](config.example.toml) в `config.toml` и заполните нужные строки. По умолчанию все они пустые.
+Остальное — по желанию: скопируйте [config.example.toml](config.example.toml) в `~/Library/Application Support/ChessCoach/config.toml` и заполните нужные строки. По умолчанию все они пустые.
 
 - `lichess_user` — ник на Lichess. Нужен, если не хотите входить в Lichess в приложении;
 - `stockfish` — путь к Stockfish, если он не в `/opt/homebrew/bin` или `/usr/local/bin`;
@@ -44,13 +44,23 @@ open ~/Applications/Шахматный\ тренер.app
 Задачи строятся из ваших партий в три шага, четвёртый печатает сводку ошибок. Всё это запускается из приложения (фоновые задания) или из терминала:
 
 ```bash
-uv run scripts/fetch_games.py    # новые партии с Lichess → data/lichess/games.ndjson
-uv run scripts/analyze.py        # Stockfish по каждому ходу → data/analysis/moves.jsonl
-uv run scripts/make_puzzles.py   # задачи из ошибок → trainer/puzzles.json
+uv run scripts/fetch_games.py    # новые партии с Lichess → lichess/games.ndjson
+uv run scripts/analyze.py        # Stockfish по каждому ходу → analysis/moves.jsonl
+uv run scripts/make_puzzles.py   # задачи из ошибок → puzzles.json
 uv run scripts/report.py         # сводка: точность, ошибки по фазам и по времени
 ```
 
-Все личные данные лежат в `data/` и `config.toml` и в репозиторий не попадают: токен Lichess, чаты, партии, прогресс по задачам.
+## Где лежат личные данные
+
+Токен Lichess, чаты, партии, прогресс по задачам и `config.toml` лежат вне папки проекта, в `~/Library/Application Support/ChessCoach/`. Поэтому они не попадают в репозиторий и общие для всех копий проекта (git worktree).
+
+Для опытов нужна отдельная папка данных, чтобы не трогать настоящие. Сервер рядом с запущенным приложением:
+
+```bash
+uv run python -m coach --home /tmp/coach-test --port 8738   # то же: COACH_HOME=/tmp/coach-test COACH_PORT=8738
+```
+
+`COACH_HOME` переносит все данные, `COACH_DATA` — только состояние приложения (`app/`), а партии и задачи берутся настоящие.
 
 ## Claude Code вне приложения
 

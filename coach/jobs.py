@@ -9,7 +9,8 @@ import itertools
 import sys
 import time
 
-from .board import ROOT, S, broadcast
+from .board import S, broadcast
+from .config import ROOT
 
 PY = sys.executable
 STEPS = {

@@ -7,8 +7,8 @@ Two kinds:
 Every legal move in each position is scored by Stockfish, so the trainer can
 judge any move the player tries, not only the engine's first choice.
 
-Input:  data/analysis/moves.jsonl, data/lichess/games.ndjson
-Output: trainer/puzzles.json
+Input:  analysis/moves.jsonl, lichess/games.ndjson of the data folder (coach/config.py)
+Output: puzzles.json of the data folder
 """
 
 import datetime
@@ -24,11 +24,9 @@ import chess.engine
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from coach.config import NO_USER, lichess_user, stockfish
+from coach.config import GAMES, MOVES, NO_USER, lichess_user, stockfish
+from coach.config import PUZZLES as OUT
 
-MOVES = ROOT / "data/analysis/moves.jsonl"
-GAMES = ROOT / "data/lichess/games.ndjson"
-OUT = ROOT / "trainer/puzzles.json"
 USER = lichess_user() or sys.exit(NO_USER)
 STOCKFISH = stockfish()
 NODES = 250_000

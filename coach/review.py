@@ -2,7 +2,7 @@
 games and the game becomes a diagram of the analysis board with ?! / ? / ?? on the inaccuracies,
 mistakes and blunders, the better line as a variation and a summary for both sides.
 
-Games come from the user's history (data/lichess/games.ndjson, refreshed by the fetch_games job) or
+Games come from the user's history (config.GAMES, refreshed by the fetch_games job) or
 from a game just played in the app (coach/live.py). Reviews never run during a live game (S.lock).
 """
 
@@ -18,11 +18,11 @@ import chess
 import chess.engine
 
 from . import config, jobs, live, scenes
-from .board import MAX_SCENES, ROOT, S, broadcast
+from .board import MAX_SCENES, S, broadcast
 from .engine import STOCKFISH, win_pct
 from .lichess import ACCOUNT
 
-GAMES = ROOT / "data" / "lichess" / "games.ndjson"
+GAMES = config.GAMES
 NODES = 400_000  # as scripts/analyze.py
 WORKERS = 6
 # Lichess's judgement thresholds: a drop of the mover's winning chances by 15 / 10 / 5 percentage points

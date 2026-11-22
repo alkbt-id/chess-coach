@@ -3,11 +3,12 @@
 __pycache__/
 *.pyc
 
-# Personal data: Lichess token, chats with Claude, games, analysis, progress
+# Personal data now lives in ~/Library/Application Support/ChessCoach (coach/config.py);
+# these are its old places inside the project, kept out in case an old copy is left there
 data/
-
-# Puzzles built from the user's own games (scripts/make_puzzles.py)
 trainer/puzzles.json
+config.toml
+
 # Build output
 trainer/trainer.html
 mac/build/
@@ -17,6 +18,3 @@ coach/web/vendor/sound/*.mp3
 
 .DS_Store
 *.tmp
-
-# Personal settings (copy of config.example.toml)
-config.toml

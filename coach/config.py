@@ -1,6 +1,15 @@
-"""Settings that differ between people: config.toml in the project folder (a copy of config.example.toml).
+"""Where the user's own data lives, and the settings that differ between people.
 
-Every key is optional and empty by default:
+Personal data is kept outside the sources, in ~/Library/Application Support/ChessCoach, so every copy of the
+repository (each git worktree) sees the same games, chats and Lichess login:
+  config.toml   settings (a copy of config.example.toml)
+  app/          the app's own state: Lichess login, chats, diagrams, puzzle progress, window settings
+  lichess/      games.ndjson and profile.json (scripts/fetch_games.py)
+  analysis/     moves.jsonl (scripts/analyze.py)
+  puzzles.json  puzzles from the user's mistakes (scripts/make_puzzles.py)
+COACH_HOME moves all of it; COACH_DATA moves only app/ (a test server with its own state and the real games).
+
+Every key of config.toml is optional and empty by default:
   lichess_user — whose games to download and analyse; empty = the account signed in to Lichess in the app
   stockfish    — path to Stockfish; empty = found on PATH or in Homebrew's usual places
   about        — a note about the player for Claude in the chat
@@ -15,8 +24,13 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(os.environ.get("COACH_DATA") or ROOT / "data" / "app")
-FILE = ROOT / "config.toml"
+HOME = Path(os.environ.get("COACH_HOME") or "~/Library/Application Support/ChessCoach").expanduser()
+DATA = Path(os.environ.get("COACH_DATA") or HOME / "app")
+FILE = HOME / "config.toml"
+GAMES = HOME / "lichess" / "games.ndjson"
+PROFILE = HOME / "lichess" / "profile.json"
+MOVES = HOME / "analysis" / "moves.jsonl"
+PUZZLES = HOME / "puzzles.json"
 NO_USER = (
     "Не знаю, чьи партии брать: войди в Lichess в приложении (вкладка «Игра») "
     "или впиши свой ник в lichess_user в config.toml."

@@ -3,7 +3,7 @@
 Each chat is a Claude Code session in the project folder, signed in with the user's own Claude Code
 login (no API key). It gets in-process tools for the board, Stockfish, the puzzle trainer and the
 background jobs; other Claude Code tools ask the user for permission in the chat.
-Transcripts for display are kept in data/app/chats/<id>.json; the Claude session id lets a chat
+Transcripts for display are kept in app/chats/<id>.json of the data folder (coach/config.py); the Claude session id lets a chat
 continue after the app restarts.
 """
 
@@ -32,7 +32,8 @@ from claude_agent_sdk import (
 )
 
 from . import board, config, jobs
-from .board import DATA, ROOT, S, broadcast, load_json, save_json
+from .board import DATA, S, broadcast, load_json, save_json
+from .config import ROOT
 from .scenes import SceneError
 
 MODELS = [
@@ -74,8 +75,9 @@ so while one is on every board tool is refused and the chat is closed. Never hel
 after it ends, its moves are a normal diagram you can review.
 
 ## Data and jobs
-- data/lichess/games.ndjson (games), data/analysis/moves.jsonl (Stockfish per move), trainer/puzzles.json (puzzles),
-  scripts/*.py (fetch_games, analyze, make_puzzles, report).
+- The user's data is outside the project, in <<HOME>>: lichess/games.ndjson (games),
+  analysis/moves.jsonl (Stockfish per move), puzzles.json (puzzles), config.toml (settings).
+  The jobs are scripts/*.py in the project (fetch_games, analyze, make_puzzles, report).
 - Long work runs as a background job: `run_job` (fetch_games, analyze, make_puzzles, update = all three, report);
   you get a message when it finishes. Use Read/Grep/Bash for anything else; risky tools ask the user first.
 """
@@ -86,7 +88,7 @@ def user_line() -> str:
     name = config.lichess_user()
     if not name:
         return "User: Lichess account not known yet (not signed in to Lichess in the app, no lichess_user in config.toml)."
-    prof = load_json(ROOT / "data/lichess/profile.json", {})
+    prof = load_json(config.PROFILE, {})
     if (prof.get("id") or "").lower() != name:
         prof = {}  # the profile of another account, before fetch_games refreshes it
     perfs = prof.get("perfs") or {}
@@ -415,8 +417,9 @@ class ChatManager:
             model=chat.model,
             effort=chat.effort,  # type: ignore[arg-type]
             cwd=str(ROOT),
+            add_dirs=[str(config.HOME)],  # the user's data lives outside the project (coach/config.py)
             resume=chat.session_id,
-            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND.replace("<<USER>>", user_line())},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND.replace("<<USER>>", user_line()).replace("<<HOME>>", str(config.HOME))},
             setting_sources=["user", "project", "local"],
             mcp_servers={"board": make_tools(chat.id)},
             allowed_tools=["mcp__board", "Read", "Glob", "Grep", "TodoWrite"],

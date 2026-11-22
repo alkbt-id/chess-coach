@@ -2684,7 +2684,7 @@ function reviewGame(withClaude) {
   if (g?.moves.length && !g.playing) openReview(g.id, withClaude);
 }
 
-// ---- the user's games (data/lichess/games.ndjson + games just played) ----
+// ---- the user's games (lichess/games.ndjson in the data folder + games just played) ----
 function loadHistory() {
   if (play.histLoading) return;
   play.histLoading = true;

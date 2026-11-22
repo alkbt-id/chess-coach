@@ -1,7 +1,7 @@
 """The app's one Lichess login, shared by every Lichess feature.
 
 Sign-in is OAuth with PKCE in the user's own browser (Lichess needs no app registration); a personal
-token can be pasted instead. The token lives in data/app/lichess.json (mode 600) and is never sent to
+token can be pasted instead. The token lives in app/lichess.json of the data folder (mode 600, coach/config.py) and is never sent to
 the window or to Claude.
 
 Scopes: board:play (live games, coach/live.py) and puzzle:read + puzzle:write (the rated puzzle
