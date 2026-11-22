@@ -287,6 +287,11 @@ async def chat_delete(request: Request):
     return JSONResponse({"ok": True})
 
 
+async def chat_close(request: Request):
+    await CHATS.close(request.path_params["cid"])
+    return JSONResponse({"ok": True})
+
+
 # ---------------- Lichess: the login (coach/lichess.py) and live games (coach/live.py) ----------------
 CALLBACK = f"http://127.0.0.1:{PORT}/api/lichess/callback"
 ORIGINS = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
@@ -516,6 +521,7 @@ app = Starlette(
         Route("/api/chat/{cid}/stop", chat_stop, methods=["POST"]),
         Route("/api/chat/{cid}/permission", chat_perm, methods=["POST"]),
         Route("/api/chat/{cid}/delete", chat_delete, methods=["POST"]),
+        Route("/api/chat/{cid}/close", chat_close, methods=["POST"]),
         Route("/api/lichess", li_state),
         Route("/api/lichess/login", li_login),
         Route("/api/lichess/callback", li_callback),

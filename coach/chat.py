@@ -274,6 +274,7 @@ class Chat:
         self.worker: asyncio.Task | None = None
         self.client: ClaudeSDKClient | None = None
         self.busy = False
+        self.closing = False  # tab closed during a reply: stop Claude once the reply is done
         self.perms: dict[str, asyncio.Future] = {}
         self.always: set[str] = set()
         self.streaming: list[dict] = []
@@ -332,6 +333,17 @@ class ChatManager:
             self.save_meta()
             await self.emit_list()
 
+    async def close(self, cid: str) -> None:
+        """Tab closed: the chat and its history stay, its `claude` process ends (so Claude Limits stops
+        listing it); the next message resumes the session. A reply in progress is let finish first."""
+        chat = self.chats.get(cid)
+        if not chat:
+            return
+        if chat.busy:
+            chat.closing = True
+        else:
+            await self._stop_worker(chat)
+
     async def configure(self, cid: str, model: str | None, effort: str | None) -> None:
         chat = self.chats[cid]
         changed = False
@@ -358,6 +370,7 @@ class ChatManager:
                 chat.title = text.strip().split("\n")[0][:48] or "Чат"
         chat.updated = time.time()
         self.save_meta()
+        chat.closing = False
         chat.queue.put_nowait(text)
         if chat.worker is None or chat.worker.done():
             chat.worker = asyncio.create_task(self._work(chat))
@@ -453,6 +466,9 @@ class ChatManager:
                         chat.updated = time.time()
                         self.save_meta()
                         await self.emit_list()
+                    if chat.closing and chat.queue.empty():  # its tab was closed during the reply
+                        chat.closing = False
+                        break
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

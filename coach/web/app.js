@@ -1952,6 +1952,7 @@ async function closeChatTab(id) {
   } else {
     closedChats.add(id);
     saveClosed();
+    post(`/api/chat/${id}/close`).catch(() => {}); // ends its Claude process, so Claude Limits drops it
   }
   if (ch.cur === id) {
     const rest = ch.list.filter((x) => !closedChats.has(x.id) && x.id !== id);
