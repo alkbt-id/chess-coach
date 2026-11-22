@@ -185,6 +185,30 @@ const cg = Chessground($("#board"), {
   },
 });
 
+// chessground remembers where the board is on screen and re-measures only on scroll, window resize or a board resize.
+// The board also moves without resizing (chat hidden, a live game centred, the eval bar shown), and clicks then
+// landed on the wrong squares. Re-measure on every press, before chessground handles it.
+for (const t of ["mousedown", "touchstart"]) {
+  $("#board").addEventListener(t, () => cg.state.dom.bounds.clear(), { capture: true, passive: true });
+}
+
+// chessground rebuilds the board when the orientation flips (and on redrawAll). A redraw queued just before that
+// still runs on the old, detached board and marks the shapes as drawn, so the new board kept stale arrows
+// (Stockfish's arrow from «Разбор» stayed over the game in «Игра»). One frame later all shapes are drawn again.
+let shapesFrame = 0;
+function resyncShapes() {
+  if (shapesFrame) return;
+  shapesFrame = requestAnimationFrame(() => {
+    shapesFrame = 0;
+    cg.state.drawable.prevSvgHash = "-"; // never a real hash: the next redraw compares every shape with the screen
+    cg.state.dom.redrawNow();
+  });
+}
+function setAutoShapes(shapes) {
+  cg.setAutoShapes(shapes);
+  resyncShapes();
+}
+
 // ---------------- layout: columns the user can resize, the board fitted to what is left ----------------
 const LAY = { gutter: 10, padX: 26, padY: 24, meta: 30 + 2 * 38, minSide: 280, minChat: 300, prefSide: 360, prefChat: 430, cur: null };
 let customCols = null; // {side, chat} once the user dragged a gutter; double-click a gutter to go back to auto
@@ -228,6 +252,7 @@ function layout() {
   if (wrap.offsetWidth !== board) {
     wrap.style.width = wrap.style.height = `${board}px`;
     cg.redrawAll();
+    resyncShapes();
   }
   LAY.cur = { side, chat, board };
 }
@@ -301,7 +326,7 @@ function setBoard({ fen, orientation, lastMove, shapes = [], movable = null, pre
     // live games only: a move made during the opponent's turn waits for it
     premovable: { enabled: premove, events: { set: premove ? (o, d) => onPremoveSet(o, d) : undefined } },
   });
-  cg.setAutoShapes(shapes);
+  setAutoShapes(shapes);
   if (changed) { cg.setShapes([]); userShapes = []; }
   renderMaterial();
   scheduleHighlight();
@@ -647,7 +672,7 @@ function hoverLine(t) {
 function tempShapes(shapes) {
   clearTempArrow();
   hov.temp = shapes;
-  cg.setAutoShapes([...cg.state.drawable.autoShapes, ...shapes]);
+  setAutoShapes([...cg.state.drawable.autoShapes, ...shapes]);
 }
 function tempArrow(uci, brush = "blue") {
   tempShapes([{ orig: uci.slice(0, 2), dest: uci.slice(2, 4), brush, modifiers: { lineWidth: 12 } }]);
@@ -655,7 +680,7 @@ function tempArrow(uci, brush = "blue") {
 function clearTempArrow() {
   if (!hov.temp) return;
   const gone = new Set(hov.temp);
-  cg.setAutoShapes(cg.state.drawable.autoShapes.filter((x) => !gone.has(x)));
+  setAutoShapes(cg.state.drawable.autoShapes.filter((x) => !gone.has(x)));
   hov.temp = null;
 }
 
@@ -947,7 +972,7 @@ function requestEval() {
         renderEvalBar();
         if (mode === "study" && !preview && shownFen === fen) {
           const node = curNode();
-          cg.setAutoShapes([...(node?.shapes || []), ...glyphShape(node), ...engineArrow(fen)]);
+          setAutoShapes([...(node?.shapes || []), ...glyphShape(node), ...engineArrow(fen)]);
         }
       } catch { return; }
     }
@@ -2792,6 +2817,7 @@ function setEngine(on) {
 function flip() {
   if (mode === "study") study.flipped = !study.flipped; else if (mode === "play") play.flipped = !play.flipped; else pz.flipped = !pz.flipped;
   cg.set({ orientation: boardOrientation() });
+  resyncShapes();
   if (mode === "play") renderPlayPanel(); // the clocks follow the board
   renderMaterial();
   renderEvalBar();
