@@ -299,10 +299,12 @@ cg-board square.hl { background: rgba(255, 190, 0, .5); }
 .chat-item.on { border-color: var(--accent); }
 .chat-item b { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item span { font-size: 11px; color: var(--muted); }
-
 /* material difference (Lichess style): the pieces a side is up, greyed, and +N */
 .mat.cg-wrap { display: flex; align-items: center; height: 34px; gap: 12px; font: 600 15px var(--font-body); color: var(--ink); }
 .mat .grp { display: inline-flex; }
+.board-foot { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.board-foot .mat { flex: 1; min-width: 0; }
+.flip-btn { flex: none; }
 .mat.cg-wrap piece { position: static; display: inline-block; width: 36px; height: 36px; margin-right: -15px; transform: none; z-index: auto; filter: grayscale(.3); will-change: auto; }
 .mat .grp piece:last-child { margin-right: 0; }
 .side-foot { flex-wrap: wrap; row-gap: 4px; }

@@ -2794,6 +2794,7 @@ function setMode(m, { save = true } = {}) {
   $("#nav").style.visibility = m === "study" || m === "play" ? "visible" : "hidden";
   $("#engine-switch").style.visibility = m === "study" ? "visible" : "hidden";
   $("#ask-switch").style.visibility = m === "study" ? "visible" : "hidden";
+  $("#foot").hidden = m === "puzzle"; // nothing left there for puzzles (the flip button sits under the board)
   if (m === "study") renderStudy(); else if (m === "play") renderPlay(); else renderPuzzle();
   if (save) http.send("PUT", "/api/settings", { mode: m }).catch(() => {});
 }
