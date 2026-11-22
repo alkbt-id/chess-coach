@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Шахматный тренер</title>
+<link rel="stylesheet" href="/static/vendor/chessground.base.css">
+<link rel="stylesheet" href="/static/vendor/board.lichess-brown.css">
+<link rel="stylesheet" href="/static/vendor/pieces.merida.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="modes" role="tablist" aria-label="Режим">
+      <button type="button" class="mode" role="tab" data-mode="study" aria-selected="false">Разбор <small id="scene-count"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="puzzle" aria-selected="false">Задачи <small id="due-count"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="play" aria-selected="false" title="Партии на Lichess">Игра <small id="play-count"></small></button>
+    </div>
+    <div class="top-right">
+      <div class="status" id="status" aria-live="polite"></div>
+      <button type="button" class="job-chip" id="job-chip" title="Обработка партий и задач">⚙︎ <span id="job-text">Обработка</span></button>
+      <button type="button" class="icon wide" id="chat-toggle" title="Показать или скрыть чат">Чат с Claude</button>
+    </div>
+  </header>
+
+  <main class="layout" id="layout">
+    <aside class="chat" id="chat">
+      <div class="chat-tabs" id="chat-tabs"></div>
+      <div class="chat-opts" id="chat-opts">
+        <select id="chat-model" title="Модель"></select>
+        <select id="chat-effort" title="Усилие (effort): сколько Claude думает"></select>
+        <button type="button" class="link-btn" id="chat-del" title="Удалить этот чат">удалить чат</button>
+      </div>
+      <div class="chat-log" id="chat-log"></div>
+      <form class="chat-input" id="chat-form">
+        <textarea id="chat-text" rows="1" placeholder="Спроси Claude про позицию, партию или задачу…"></textarea>
+        <button class="btn primary" id="chat-send" type="submit">Отправить</button>
+      </form>
+    </aside>
+    <div class="gutter" id="g2" title="Тяни, чтобы поменять ширину · двойной клик — авто"></div>
+    <section class="board-col">
+      <div class="mat cg-wrap" id="mat-top"></div>
+      <div class="board-row">
+        <div class="evalbar" id="evalbar" hidden><i id="evalfill"></i><span id="evaltext"></span></div>
+        <div class="board-wrap" id="board-wrap"><div id="board"></div></div>
+      </div>
+      <div class="mat cg-wrap" id="mat-bottom"></div>
+      <div class="meta" id="meta"></div>
+    </section>
+    <div class="gutter" id="g1" title="Тяни, чтобы поменять ширину · двойной клик — авто"></div>
+
+    <aside class="side">
+      <div class="preview" id="preview" hidden></div>
+      <div class="side-body" id="panel"></div>
+      <div class="side-foot" id="foot">
+        <div class="nav" id="nav">
+          <button type="button" class="icon" data-nav="first" title="В начало (↑)">⏮</button>
+          <button type="button" class="icon" data-nav="prev" title="Назад (←)">◀</button>
+          <button type="button" class="icon" data-nav="next" title="Вперёд (→)">▶</button>
+          <button type="button" class="icon" data-nav="last" title="В конец (↓)">⏭</button>
+        </div>
+        <div class="foot-right">
+          <label class="switch" id="ask-switch" title="В диаграммах Claude и в позициях из задач твой ход = просьба к Claude посчитать вариант. На своей доске — кнопкой под деревом."><input type="checkbox" id="auto-ask"><span>Claude разбирает мои ходы</span></label>
+          <label class="switch" id="engine-switch" title="Stockfish (L)"><input type="checkbox" id="engine-on"><span>Stockfish</span></label>
+          <button type="button" class="icon" id="flip" title="Перевернуть доску (F)">⇅</button>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+</div>
+
+<div class="hoverboard" id="hoverboard" hidden><div id="hb"></div></div>
+<div class="ctx" id="ctx" hidden></div>
+<div class="pop" id="jobs-pop" hidden></div>
+<div class="pop" id="chats-pop" hidden></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

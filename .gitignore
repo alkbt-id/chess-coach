@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Personal data: Lichess token, chats with Claude, games, analysis, progress
+data/
+
+# Puzzles built from the user's own games (scripts/make_puzzles.py)
+trainer/puzzles.json
+# Build output
+trainer/trainer.html
+mac/build/
+
+# Lichess sounds are non-free: scripts/fetch_sounds.sh downloads them locally
+coach/web/vendor/sound/*.mp3
+
+.DS_Store
+*.tmp

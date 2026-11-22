@@ -1,0 +1,519 @@
+"""Chats with Claude inside the app (Claude Agent SDK = Claude Code as a library).
+
+Each chat is a Claude Code session in the project folder, signed in with the user's own Claude Code
+login (no API key). It gets in-process tools for the board, Stockfish, the puzzle trainer and the
+background jobs; other Claude Code tools ask the user for permission in the chat.
+Transcripts for display are kept in data/app/chats/<id>.json; the Claude session id lets a chat
+continue after the app restarts.
+"""
+
+import asyncio
+import itertools
+import warnings
+import json
+import time
+import uuid
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ResultMessage,
+    StreamEvent,
+    SystemMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+    create_sdk_mcp_server,
+    tool,
+)
+
+from . import board, jobs
+from .board import DATA, ROOT, S, broadcast, load_json, save_json
+from .scenes import SceneError
+
+MODELS = [
+    {"id": "claude-opus-5-5", "name": "Opus 5.5"},
+    {"id": "claude-sonnet-5-5", "name": "Sonnet 5.5"},
+    {"id": "claude-haiku-5-5", "name": "Haiku 5.5"},
+    {"id": "claude-fable-5-2", "name": "Fable 5.2"},
+]
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+# allowed_tools auto-approves the board tools and read-only tools on purpose
+warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
+DEFAULT_MODEL, DEFAULT_EFFORT = "claude-opus-5-5", "high"
+CHATS_DIR = DATA / "chats"
+
+SYSTEM_APPEND = """
+# You are inside the desktop app «Шахматный тренер»
+The user talks to you in the app's chat panel; next to it is a chess board they are looking at.
+User: Lichess alkbtz, ~1300 rapid, puzzle rating ~1780 — sees tactics in puzzles, misses them in games.
+Reply in Russian, short and concrete; the chat renders Markdown. Moves in SAN with numbers (25.a4 Ng2 26.Kb3):
+the app makes them clickable and shows the line on the board, so always write lines from a position that is
+on the board (the current diagram or puzzle).
+
+## Tone
+Talk like a friendly, respectful coach. Never call the user's moves, ideas or play «тупой», «глупый», «ужасный»
+or anything like it — even when the user uses such a word: from them it is frustration, not permission.
+Name a mistake neutrally («ошибка», «неточность», «зевок») and explain what it missed and what to look at next time.
+
+## Show, don't just tell
+- Read `board_state` first whenever the user means "this position", «поясни», «почему», «а если».
+- Put positions, lines and arrows on the board with `show`, `add_line`, `annotate`, `goto`. The study board is a
+  Lichess-style move tree: the first line is the main line, others are variations. One idea per comment.
+- Never state a line or an evaluation you have not checked with `analyse` (Stockfish). Explain plans and ideas
+  in human terms; numbers only as support.
+- Ask questions in plain text (there is no question tool here).
+
+## Live games
+The «Игра» mode plays real games on the user's Lichess account. Lichess forbids any outside help during a game,
+so while one is on every board tool is refused and the chat is closed. Never help with a game in progress;
+after it ends, its moves are a normal diagram you can review.
+
+## Data and jobs
+- data/lichess/games.ndjson (games), data/analysis/moves.jsonl (Stockfish per move), trainer/puzzles.json (puzzles),
+  scripts/*.py (fetch_games, analyze, make_puzzles, report).
+- Long work runs as a background job: `run_job` (fetch_games, analyze, make_puzzles, update = all three, report);
+  you get a message when it finishes. Use Read/Grep/Bash for anything else; risky tools ask the user first.
+"""
+
+
+def summarize_input(name: str, inp: dict) -> str:
+    if name == "Bash":
+        return inp.get("command", "")[:300]
+    if name in ("Write", "Edit", "Read", "NotebookEdit"):
+        return inp.get("file_path", "")
+    if name in ("WebFetch",):
+        return inp.get("url", "")
+    if name == "WebSearch":
+        return inp.get("query", "")
+    if name.startswith("mcp__board__"):
+        return {k: v for k, v in inp.items() if k in ("title", "position", "at", "moves", "action", "kind")}.__repr__()[:200]
+    return json.dumps(inp, ensure_ascii=False)[:200]
+
+
+def perm_key(name: str, inp: dict) -> tuple[str | None, str]:
+    """What an "always allow" answer remembers, like Claude Code's permission rules:
+    a command prefix for Bash, one file for edits, one site for web fetches.
+    Returns (key, label); key None means "always" is not offered (compound shell commands)."""
+    if name == "Bash":
+        cmd = (inp.get("command") or "").strip()
+        if not cmd or any(op in cmd for op in (";", "&&", "||", "|", "`", "$(", ">", "<", "\n")):
+            return None, ""
+        prefix = " ".join(cmd.split()[:2])
+        return f"Bash:{prefix}", f"команды «{prefix} …»"
+    if name in ("Write", "Edit", "NotebookEdit"):
+        path = inp.get("file_path") or inp.get("notebook_path") or ""
+        return f"{name}:{path}", f"файла {path}"
+    if name == "WebFetch":
+        from urllib.parse import urlparse
+        host = urlparse(inp.get("url") or "").hostname or ""
+        return f"WebFetch:{host}", f"сайта {host}"
+    return name, f"инструмента {name}"
+
+
+# ---------------- in-process tools for Claude ----------------
+def _ok(data) -> dict:
+    return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, indent=1)}]}
+
+
+def _err(msg: str) -> dict:
+    return {"content": [{"type": "text", "text": msg}], "is_error": True}
+
+
+SHAPES = {
+    "type": "array", "items": {"type": "string"},
+    "description": "Arrows/circles: 'e2e4' (green arrow), 'e2e4:red', 'f7:yellow' (circle), 'f7:red:!' (with a 1–3 char label). "
+                   "Colors: green = good/plan, red = threat/bad, blue = alternative, yellow = attention, orange, purple.",
+}
+AT = {"type": "string", "description": "Node: 'start', 'current' (what the user sees), a node id like 'n12', or moves from the diagram start ('25.a4 Ng2')."}
+MOVES = {
+    "description": "Moves: '25.a4 Ng2 26.Kb3' (SAN or UCI, numbers optional, !/? glyphs allowed) or a list of strings / "
+                   "{move, comment, shapes, glyph} to annotate single moves.",
+    "anyOf": [{"type": "string"}, {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}}],
+}
+
+
+def _schema(props: dict, required: list[str] | None = None) -> dict:
+    return {"type": "object", "properties": props, "required": required or []}
+
+
+def make_tools(chat_id: str):
+    async def call(name: str, args: dict):
+        try:
+            return _ok(await board.call_op(name, args))
+        except (SceneError, ValueError) as e:
+            return _err(str(e))
+
+    @tool("board_state", "What the user sees now: mode (study/puzzle), board FEN and text diagram, the study tree (PGN with node ids "
+          "[nX], user's own moves marked ·user) and the node they are on, or the puzzle with engine data and their tries.", _schema({}))
+    async def board_state(args):
+        return await call("board_state", args)
+
+    @tool("show", "Put a new diagram on the board (study mode); older diagrams stay in its list. Lines become a Lichess-style tree: "
+          "the first is the main line, later ones variations; a line's 'at' starts it deeper in the tree.",
+          _schema({
+              "title": {"type": "string"},
+              "position": {"type": "string", "description": "'start', 'current', a FEN, or moves from the initial position."},
+              "lines": {"type": "array", "items": {"type": "object", "properties": {
+                  "moves": MOVES, "title": {"type": "string", "description": "short label shown before the line"},
+                  "comment": {"type": "string"}, "shapes": SHAPES, "at": AT}}},
+              "comment": {"type": "string", "description": "Text for the whole diagram (Markdown)."},
+              "shapes": SHAPES,
+              "orientation": {"type": "string", "enum": ["white", "black"]},
+              "goto": AT,
+          }, ["title"]))
+    async def show(args):
+        return await call("show", {**args, "chat": chat_id})
+
+    @tool("add_line", "Add moves to the current diagram's tree from node `at` (default: start); existing moves are reused, new ones "
+          "become a variation. The board jumps to its first new move.",
+          _schema({"moves": MOVES, "at": AT, "title": {"type": "string"}, "comment": {"type": "string"}, "shapes": SHAPES,
+                   "scene": {"type": "string"}}, ["moves"]))
+    async def add_line(args):
+        return await call("add_line", args)
+
+    @tool("annotate", "Set comment / arrows / glyph (!, ?, !!, ??, !?, ?!) on a node (default: the one the user is on) and show it. "
+          "append=true adds instead of replacing. title renames the diagram.",
+          _schema({"at": AT, "comment": {"type": "string"}, "shapes": SHAPES, "glyph": {"type": "string"},
+                   "append": {"type": "boolean"}, "title": {"type": "string"}, "scene": {"type": "string"}}))
+    async def annotate(args):
+        return await call("annotate", args)
+
+    @tool("goto", "Move the user's board to a node of a diagram (scene = an older diagram id).",
+          _schema({"at": AT, "scene": {"type": "string"}}))
+    async def goto(args):
+        return await call("goto", args)
+
+    @tool("edit", "Change the tree: 'promote' makes the line through `at` the main line, 'delete' removes `at` and what follows.",
+          _schema({"at": AT, "action": {"type": "string", "enum": ["promote", "delete"]}, "scene": {"type": "string"}}, ["action"]))
+    async def edit(args):
+        return await call("edit", args)
+
+    @tool("analyse", "Stockfish: top lines with eval (side to move, pawns) and win %. position: 'current' (user's board), FEN, "
+          "or moves from the start. threat=true also gives the opponent's threat (null move).",
+          _schema({"position": {"type": "string"}, "lines": {"type": "integer"}, "seconds": {"type": "number"},
+                   "threat": {"type": "boolean"}}))
+    async def analyse(args):
+        return await call("analyse", args)
+
+    @tool("puzzles", "Puzzle trainer (positions from the user's games): action 'stats', 'failing' (most failed), 'open' (id), "
+          "'resume' (back to puzzle mode).",
+          _schema({"action": {"type": "string", "enum": ["stats", "failing", "open", "resume"]}, "id": {"type": "string"}}, ["action"]))
+    async def puzzles(args):
+        return await call("puzzles", args)
+
+    @tool("run_job", "Start a background job: fetch_games (new Lichess games), analyze (Stockfish over new games), make_puzzles "
+          "(puzzles from new errors), update (all three), report (error statistics). Returns at once; you get a message when it ends.",
+          _schema({"kind": {"type": "string", "enum": list(jobs.KINDS)}}, ["kind"]))
+    async def run_job(args):
+        try:
+            job = await jobs.start(args["kind"], chat_id)
+        except ValueError as e:
+            return _err(str(e))
+        return _ok({"started": job.public()})
+
+    @tool("job_status", "Status and last output lines of background jobs (all, or one id).", _schema({"id": {"type": "string"}}))
+    async def job_status(args):
+        if args.get("id"):
+            j = jobs.JOBS.get(args["id"])
+            return _ok(j.public(40)) if j else _err("no such job")
+        return _ok([j.public() for j in jobs.JOBS.values()])
+
+    return create_sdk_mcp_server("board", tools=[board_state, show, add_line, annotate, goto, edit, analyse, puzzles, run_job, job_status])
+
+
+# ---------------- chats ----------------
+class Chat:
+    def __init__(self, meta: dict) -> None:
+        self.id: str = meta["id"]
+        self.title: str = meta.get("title") or "Новый чат"
+        self.model: str = meta.get("model") or DEFAULT_MODEL
+        self.effort: str = meta.get("effort") or DEFAULT_EFFORT
+        self.session_id: str | None = meta.get("session_id")
+        self.created: float = meta.get("created") or time.time()
+        self.updated: float = meta.get("updated") or self.created
+        self.cost: float = meta.get("cost") or 0.0
+        self.entries: list[dict] = load_json(CHATS_DIR / f"{self.id}.json", [])
+        # a reply cut off by an app restart: close what was left open
+        cut = False
+        for e in self.entries:
+            if e.get("kind") == "tool" and e.get("status") == "running":
+                e["status"], e["error"], cut = "error", "прервано перезапуском приложения", True
+            if e.get("streaming"):
+                e.pop("streaming")
+                cut = True
+            if e.get("kind") == "permission" and e.get("state") == "pending":
+                e["state"], cut = "denied", True
+        if cut:
+            self.entries.append({"id": f"e{len(self.entries) + 1}", "ts": time.time(), "kind": "note",
+                                 "text": "Ответ прервался: приложение перезапускалось. Отправь вопрос ещё раз."})
+        self.seq = itertools.count(len(self.entries) + 1)
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self.worker: asyncio.Task | None = None
+        self.client: ClaudeSDKClient | None = None
+        self.busy = False
+        self.perms: dict[str, asyncio.Future] = {}
+        self.always: set[str] = set()
+        self.streaming: list[dict] = []
+
+    def meta(self) -> dict:
+        return {"id": self.id, "title": self.title, "model": self.model, "effort": self.effort, "session_id": self.session_id,
+                "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy}
+
+    def save(self) -> None:
+        save_json(CHATS_DIR / f"{self.id}.json", self.entries)
+
+
+class ChatManager:
+    def __init__(self) -> None:
+        metas = load_json(DATA / "chats.json", [])
+        self.chats: dict[str, Chat] = {m["id"]: Chat(m) for m in metas}
+        jobs.on_finish(self._job_finished)
+
+    # ---- bookkeeping ----
+    def save_meta(self) -> None:
+        save_json(DATA / "chats.json", [c.meta() for c in self.chats.values()])
+
+    def listing(self) -> list[dict]:
+        return sorted((c.meta() for c in self.chats.values()), key=lambda m: -m["updated"])
+
+    async def emit_list(self) -> None:
+        await broadcast({"type": "chat_list", "chats": self.listing()})
+
+    async def add_entry(self, chat: Chat, entry: dict, save: bool = True) -> dict:
+        entry = {"id": f"e{next(chat.seq)}", "ts": time.time(), **entry}
+        chat.entries.append(entry)
+        if save:
+            chat.save()
+        await broadcast({"type": "chat_entry", "chat": chat.id, "entry": entry})
+        return entry
+
+    async def update_entry(self, chat: Chat, entry: dict, save: bool = True) -> None:
+        if save:
+            chat.save()
+        await broadcast({"type": "chat_entry", "chat": chat.id, "entry": entry})
+
+    # ---- API ----
+    async def create(self, model: str | None = None, effort: str | None = None) -> Chat:
+        cid = uuid.uuid4().hex[:10]
+        chat = Chat({"id": cid, "model": model or DEFAULT_MODEL, "effort": effort or DEFAULT_EFFORT})
+        self.chats[cid] = chat
+        self.save_meta()
+        await self.emit_list()
+        return chat
+
+    async def delete(self, cid: str) -> None:
+        chat = self.chats.pop(cid, None)
+        if chat:
+            await self._stop_worker(chat)
+            (CHATS_DIR / f"{cid}.json").unlink(missing_ok=True)
+            self.save_meta()
+            await self.emit_list()
+
+    async def configure(self, cid: str, model: str | None, effort: str | None) -> None:
+        chat = self.chats[cid]
+        changed = False
+        if model and model != chat.model:
+            chat.model, changed = model, True
+        if effort and effort in EFFORTS and effort != chat.effort:
+            chat.effort, changed = effort, True
+        if changed:
+            if not chat.busy:
+                await self._stop_worker(chat)  # restarts with the new settings on the next message
+            self.save_meta()
+            await self.emit_list()
+
+    async def send(self, cid: str, text: str, *, note: str | None = None) -> None:
+        """Queue a message for Claude. With `note`, the chat shows that short note instead of the text."""
+        if S.lock:  # a live Lichess game: no outside help (coach/lichess.py)
+            raise ValueError(S.lock)
+        chat = self.chats[cid]
+        if note:
+            await self.add_entry(chat, {"kind": "note", "text": note})
+        else:
+            await self.add_entry(chat, {"kind": "user", "text": text})
+            if chat.title == "Новый чат":
+                chat.title = text.strip().split("\n")[0][:48] or "Чат"
+        chat.updated = time.time()
+        self.save_meta()
+        chat.queue.put_nowait(text)
+        if chat.worker is None or chat.worker.done():
+            chat.worker = asyncio.create_task(self._work(chat))
+        await self.emit_list()
+
+    async def interrupt(self, cid: str) -> None:
+        chat = self.chats[cid]
+        for fut in chat.perms.values():
+            if not fut.done():
+                fut.set_result((False, False))
+        if chat.client and chat.busy:
+            try:
+                await chat.client.interrupt()
+            except Exception:  # noqa: BLE001
+                await self._stop_worker(chat)
+
+    async def answer(self, cid: str, req: str, allow: bool, always: bool) -> None:
+        fut = self.chats[cid].perms.get(req)
+        if fut and not fut.done():
+            fut.set_result((allow, always))
+
+    # ---- worker ----
+    async def _stop_worker(self, chat: Chat) -> None:
+        if chat.worker and not chat.worker.done():
+            chat.worker.cancel()
+            try:
+                await chat.worker
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        chat.worker = None
+        chat.client = None
+        chat.busy = False
+
+    def _options(self, chat: Chat) -> ClaudeAgentOptions:
+        async def can_use_tool(name: str, inp: dict, _ctx):
+            key, label = perm_key(name, inp)
+            if key and key in chat.always:
+                return PermissionResultAllow()
+            req = uuid.uuid4().hex[:8]
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            chat.perms[req] = fut
+            entry = await self.add_entry(chat, {"kind": "permission", "req": req, "tool": name,
+                                                "summary": summarize_input(name, inp), "state": "pending",
+                                                "what": (inp.get("description") or "").strip() if name == "Bash" else "",
+                                                "always_label": label if key else ""})
+            allow, always = await fut
+            chat.perms.pop(req, None)
+            entry["state"] = "allowed" if allow else "denied"
+            await self.update_entry(chat, entry)
+            if allow and always and key:
+                chat.always.add(key)
+            if allow:
+                return PermissionResultAllow()
+            return PermissionResultDeny(message="Пользователь не разрешил это действие.")
+
+        return ClaudeAgentOptions(
+            model=chat.model,
+            effort=chat.effort,  # type: ignore[arg-type]
+            cwd=str(ROOT),
+            resume=chat.session_id,
+            system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_APPEND},
+            setting_sources=["user", "project", "local"],
+            mcp_servers={"board": make_tools(chat.id)},
+            allowed_tools=["mcp__board", "Read", "Glob", "Grep", "TodoWrite"],
+            disallowed_tools=["AskUserQuestion", "mcp__chess-board", "ExitPlanMode", "EnterPlanMode"],
+            permission_mode="default",
+            can_use_tool=can_use_tool,
+            include_partial_messages=True,
+            stderr=lambda _line: None,
+            # The Claude Limits menu bar app reads this from the process and opens it on a click:
+            # the app comes forward and switches to this chat (mac/main.swift handles chess-coach://).
+            env={"CLAUDE_LIMITS_OPEN_URL": f"chess-coach://chat?id={chat.id}"},
+        )
+
+    async def _work(self, chat: Chat) -> None:
+        try:
+            async with ClaudeSDKClient(options=self._options(chat)) as client:
+                chat.client = client
+                while True:
+                    text = await chat.queue.get()
+                    chat.busy = True
+                    await self.emit_list()
+                    try:
+                        await client.query(text)
+                        async for msg in client.receive_response():
+                            await self._handle(chat, msg)
+                    except Exception as e:  # noqa: BLE001
+                        await self.add_entry(chat, {"kind": "error", "text": f"Ошибка: {e}"})
+                    finally:
+                        chat.busy = False
+                        chat.streaming = []
+                        chat.updated = time.time()
+                        self.save_meta()
+                        await self.emit_list()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            await self.add_entry(chat, {"kind": "error", "text": f"Не удалось запустить Claude: {e}"})
+        finally:
+            chat.client = None
+            chat.busy = False
+            await self.emit_list()
+
+    async def _handle(self, chat: Chat, msg) -> None:
+        if isinstance(msg, SystemMessage):
+            sid = (msg.data or {}).get("session_id")
+            if sid and sid != chat.session_id:
+                chat.session_id = sid
+                self.save_meta()
+            return
+        if isinstance(msg, StreamEvent):
+            if msg.parent_tool_use_id:
+                return
+            ev = msg.event
+            if ev.get("type") == "content_block_start" and ev.get("content_block", {}).get("type") == "text":
+                entry = await self.add_entry(chat, {"kind": "assistant", "text": "", "streaming": True}, save=False)
+                chat.streaming.append(entry)
+            elif ev.get("type") == "content_block_delta" and ev.get("delta", {}).get("type") == "text_delta" and chat.streaming:
+                entry = chat.streaming[-1]
+                entry["text"] += ev["delta"]["text"]
+                await broadcast({"type": "chat_delta", "chat": chat.id, "entry": entry["id"], "text": ev["delta"]["text"]})
+            return
+        if isinstance(msg, AssistantMessage):
+            if msg.parent_tool_use_id:
+                return
+            streamed = list(chat.streaming)
+            chat.streaming = []
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    if streamed:
+                        entry = streamed.pop(0)
+                        entry["text"] = block.text
+                        entry.pop("streaming", None)
+                        await self.update_entry(chat, entry)
+                    elif block.text.strip():
+                        await self.add_entry(chat, {"kind": "assistant", "text": block.text})
+                elif isinstance(block, ToolUseBlock):
+                    await self.add_entry(chat, {"kind": "tool", "tool_id": block.id, "name": block.name,
+                                                "summary": summarize_input(block.name, block.input or {}), "status": "running",
+                                                "what": ((block.input or {}).get("description") or "").strip() if block.name == "Bash" else ""})
+            for entry in streamed:  # streamed text the final message did not carry
+                entry.pop("streaming", None)
+                await self.update_entry(chat, entry)
+            return
+        if isinstance(msg, UserMessage):
+            if msg.parent_tool_use_id or not isinstance(msg.content, list):
+                return
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    for entry in reversed(chat.entries):
+                        if entry.get("kind") == "tool" and entry.get("tool_id") == block.tool_use_id:
+                            entry["status"] = "error" if block.is_error else "ok"
+                            if block.is_error:
+                                text = block.content if isinstance(block.content, str) else json.dumps(block.content, ensure_ascii=False)
+                                entry["error"] = (text or "")[:300]
+                            await self.update_entry(chat, entry)
+                            break
+            return
+        if isinstance(msg, ResultMessage):
+            if msg.session_id:
+                chat.session_id = msg.session_id
+            chat.cost += msg.total_cost_usd or 0.0
+            if msg.is_error:
+                errs = "; ".join(msg.errors or []) if getattr(msg, "errors", None) else (msg.result or msg.subtype)
+                await self.add_entry(chat, {"kind": "error", "text": f"Claude остановился: {errs}"})
+            self.save_meta()
+
+    async def _job_finished(self, job) -> None:
+        if not job.chat or job.chat not in self.chats:
+            return
+        status = {"done": "завершена", "failed": "упала", "cancelled": "остановлена"}.get(job.status, job.status)
+        tail = "\n".join(list(job.lines)[-15:])
+        await self.send(job.chat, f"[Фоновая задача «{job.title}» {status}. Последние строки вывода:\n{tail}\n]\n"
+                                  "Коротко сообщи пользователю результат.", note=f"Фоновая задача «{job.title}» {status}")
+
+
+CHATS = ChatManager()

@@ -1,0 +1,553 @@
+<title>Тренажёр по партиям alkbtz</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Unbounded:wght@500;700&display=swap">
+<style>
+/* Layout: board left as the working surface, a narrow coaching column right; stacks on phones. */
+:root {
+  --bg: #eef1ee;
+  --surface: #ffffff;
+  --ink: #18201c;
+  --muted: #5b6760;
+  --line: #d5ddd7;
+  --accent: #245f86;
+  --accent-ink: #ffffff;
+  --accent-soft: #dde9f1;
+  --good: #2c7a4b;
+  --good-soft: #dcefe2;
+  --bad: #b23b2a;
+  --bad-soft: #f6e0dc;
+  --font-display: "Unbounded", "Arial Black", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121614;
+    --surface: #1b211e;
+    --ink: #e4eae6;
+    --muted: #97a39c;
+    --line: #2d3631;
+    --accent: #78b4dc;
+    --accent-ink: #0d1a22;
+    --accent-soft: #1f3341;
+    --good: #6cc48f;
+    --good-soft: #1d3326;
+    --bad: #ef8a78;
+    --bad-soft: #3b211d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121614;
+  --surface: #1b211e;
+  --ink: #e4eae6;
+  --muted: #97a39c;
+  --line: #2d3631;
+  --accent: #78b4dc;
+  --accent-ink: #0d1a22;
+  --accent-soft: #1f3341;
+  --good: #6cc48f;
+  --good-soft: #1d3326;
+  --bad: #ef8a78;
+  --bad-soft: #3b211d;
+  color-scheme: dark;
+}
+
+/*CHESSGROUND_CSS*/
+
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.app {
+  max-width: 1120px; margin: 0 auto; display: grid; gap: 18px;
+  padding-block: 20px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+header { display: grid; gap: 6px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: 22px; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.sub { margin: 0; color: var(--muted); max-width: 68ch; }
+
+.stats { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 6px; }
+.stat { display: grid; gap: 0; }
+.stat b { font-family: var(--font-mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.chip {
+  font: 500 13px/1 var(--font-body); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; cursor: pointer;
+}
+.chip small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; margin-left: 3px; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chip[aria-pressed="true"] small { color: inherit; opacity: 0.8; }
+.chip:focus-visible, .btn:focus-visible, .mv:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 600px) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 880px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.board-col { display: grid; gap: 10px; min-width: 0; }
+.board-wrap { width: 100%; max-width: 100%; aspect-ratio: 1 / 1; border-radius: 4px; overflow: hidden; box-shadow: 0 1px 0 var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.35); }
+#board { width: 100%; height: 100%; }
+.meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.meta a { color: var(--accent); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
+.tag { padding: 3px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.tag.missed { background: var(--good-soft); color: var(--good); }
+.tag.blunder { background: var(--bad-soft); color: var(--bad); }
+.eyebrow .ph { color: var(--muted); font-weight: 500; }
+.task h2 { font-family: var(--font-display); font-weight: 500; font-size: 18px; margin: 8px 0 6px; }
+.task p { margin: 0; }
+.san { font-family: var(--font-mono); font-weight: 600; }
+
+.result { border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; }
+.result.ok { background: var(--good-soft); }
+.result.fail { background: var(--bad-soft); }
+.result h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.result.ok h3 { color: var(--good); }
+.result.fail h3 { color: var(--bad); }
+.result p { margin: 0; }
+
+.meter { display: grid; gap: 4px; }
+.meter-row { display: grid; grid-template-columns: 11ch 1fr 5ch; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.meter-row b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; font-weight: 600; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--muted); }
+.bar i.good { background: var(--good); }
+.bar i.bad { background: var(--bad); }
+
+.lines { display: grid; gap: 10px; }
+.line h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; }
+.moves { display: flex; flex-wrap: wrap; gap: 2px 4px; font-family: var(--font-mono); font-size: 14px; }
+.num { color: var(--muted); padding: 2px 0 2px 2px; }
+.mv { font: inherit; color: var(--ink); background: none; border: 0; border-radius: 4px; padding: 2px 4px; cursor: pointer; }
+.mv:hover { background: var(--accent-soft); }
+.mv.on { background: var(--accent); color: var(--accent-ink); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { font: 600 14px/1 var(--font-body); border-radius: 8px; padding: 10px 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.quiet { border-color: transparent; color: var(--muted); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.hint { font-size: 12px; color: var(--muted); margin: 0; }
+.sync { font-size: 12px; color: var(--muted); }
+.empty { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <h1>Тренажёр по партиям alkbtz</h1>
+    <p class="sub">Позиции из твоих рапид-партий на Lichess. <b>Не зевни</b> — здесь ты в партии сделал плохой ход. <b>Накажи</b> — соперник только что ошибся, а ты не воспользовался. Ошибки возвращаются на повтор, решённые — всё реже.</p>
+    <div class="stats" id="stats" aria-live="polite"></div>
+    <div class="sync" id="sync"></div>
+  </header>
+
+  <nav class="filters" id="filters" aria-label="Фильтры"></nav>
+
+  <main class="layout">
+    <section class="board-col">
+      <div class="board-wrap"><div id="board"></div></div>
+      <div class="meta" id="meta"></div>
+    </section>
+    <aside class="panel" id="panel">
+      <p class="empty">Загружаю позиции…</p>
+    </aside>
+  </main>
+</div>
+
+<script type="module">
+import { Chessground } from "https://cdn.jsdelivr.net/npm/chessground@9.2.1/dist/chessground.min.js";
+import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/dist/esm/chess.js";
+
+const $ = (s) => document.querySelector(s);
+const PASS = 8; // win-% points from the best move that still count as solved
+const MIN = 60e3, DAY = 864e5;
+const INTERVALS = [5 * MIN, 1 * DAY, 3 * DAY, 7 * DAY, 16 * DAY, 35 * DAY];
+const KIND = { blunder: "Не зевни", missed: "Накажи" };
+const PHASE = { opening: "Дебют", middlegame: "Миттельшпиль", endgame: "Эндшпиль" };
+const SIDE = { white: "белых", black: "чёрных" };
+const LS_PROGRESS = "trainer.progress.v1", LS_FILTER = "trainer.filter.v1";
+
+let puzzles = [];
+let prog = {};
+let cur = null;
+let st = null; // {recorded, hinted, solution, result, viewing}
+const session = { done: 0, ok: 0 };
+let filt = { kind: "all", phase: "all", color: "all" };
+let db = null, canWrite = false;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const hash = (s) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+const pct = (w) => `${Math.round(w)}%`;
+const turnOf = (fen) => (fen.split(" ")[1] === "w" ? "white" : "black");
+const other = (c) => (c === "white" ? "black" : "white");
+const sq = (u) => [u.slice(0, 2), u.slice(2, 4)];
+
+prog = lsGet(LS_PROGRESS, {});
+filt = { ...filt, ...lsGet(LS_FILTER, {}) };
+
+const cg = Chessground($("#board"), {
+  coordinates: true,
+  animation: { enabled: true, duration: 180 },
+  movable: { free: false, showDests: true },
+  premovable: { enabled: false },
+  draggable: { showGhost: true },
+  highlight: { lastMove: true, check: true },
+  drawable: { enabled: true },
+});
+
+// ---------- progress storage ----------
+function setSync(text) { $("#sync").textContent = text; }
+
+async function save(id, rec) {
+  prog = { ...prog, [id]: rec };
+  lsSet(LS_PROGRESS, prog);
+  if (!db || !canWrite) return;
+  try { await db.collection("progress").doc(id).set(rec); }
+  catch (e) {
+    if (e?.code === "invalid_argument") { canWrite = false; setSync("Прогресс сохраняется только в этом браузере."); }
+  }
+}
+
+async function connectStore() {
+  const use = window.claude?.use;
+  if (!use) return;
+  const [d, u] = await Promise.all([use("db"), use("user")]);
+  if (!d) return;
+  const owner = u ? await u.isOwner() : null;
+  canWrite = owner !== false;
+  db = d;
+  let first = true;
+  const timer = setTimeout(() => setSync("Прогресс с сервера ещё не пришёл — пока сохраняю в этом браузере."), 10000);
+  db.collection("progress").onSnapshot((snap) => {
+    const remote = {};
+    for (const doc of snap.docs) if (doc.exists) remote[doc.id] = doc.data();
+    const merged = { ...prog };
+    for (const [id, r] of Object.entries(remote)) if (!merged[id] || (r.last || 0) >= (merged[id].last || 0)) merged[id] = r;
+    prog = merged;
+    lsSet(LS_PROGRESS, prog);
+    if (!snap.metadata.fromCache) {
+      clearTimeout(timer);
+      setSync(canWrite ? "" : "Прогресс сохраняется только в этом браузере.");
+      if (first && canWrite) {
+        first = false;
+        // push answers made in this browser before the store answered
+        (async () => {
+          for (const [id, r] of Object.entries(prog))
+            if (!remote[id] || (remote[id].last || 0) < (r.last || 0)) {
+              try { await db.collection("progress").doc(id).set(r); } catch { break; }
+            }
+        })();
+      }
+    }
+    renderStats();
+    renderFilters();
+  }, () => { clearTimeout(timer); db = null; setSync("Прогресс с сервера недоступен — сохраняю в этом браузере."); });
+}
+
+// ---------- queue ----------
+function match(p, f = filt) {
+  return (f.kind === "all" || p.kind === f.kind)
+    && (f.phase === "all" || p.phase === f.phase)
+    && (f.color === "all" || p.color === f.color);
+}
+
+function pickNext() {
+  const now = Date.now();
+  const pool = puzzles.filter((p) => match(p) && p !== cur);
+  if (!pool.length) return puzzles.filter((p) => match(p))[0] || null;
+  const due = pool.filter((p) => prog[p.id] && prog[p.id].due <= now).sort((a, b) => prog[a.id].due - prog[b.id].due);
+  if (due.length) return due[0];
+  const fresh = pool.filter((p) => !prog[p.id]).sort((a, b) => hash(a.id) - hash(b.id));
+  if (fresh.length) return fresh[0];
+  return pool.sort((a, b) => prog[a.id].due - prog[b.id].due)[0];
+}
+
+function record(p, ok) {
+  const old = prog[p.id] || {};
+  const box = ok ? Math.min((old.box || 0) + 1, INTERVALS.length - 1) : 0;
+  const now = Date.now();
+  save(p.id, {
+    box,
+    due: now + INTERVALS[ok ? box : 0],
+    ok: (old.ok || 0) + (ok ? 1 : 0),
+    fail: (old.fail || 0) + (ok ? 0 : 1),
+    last: now,
+    lastOk: ok,
+  });
+}
+
+// ---------- chess helpers ----------
+function line(fen, ucis) {
+  const c = new Chess(fen);
+  const out = [];
+  for (const u of ucis) {
+    try {
+      const m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+      out.push({ san: m.san, fen: c.fen(), from: m.from, to: m.to, check: c.inCheck() ? turnOf(c.fen()) : false });
+    } catch { break; }
+  }
+  return out;
+}
+
+function sanOf(fen, uci) { return line(fen, [uci])[0]?.san ?? uci; }
+
+function numbered(fen, plies) {
+  const [, side, , , , full] = fen.split(" ");
+  let n = Number(full), white = side === "w";
+  const parts = [];
+  plies.forEach((pl, i) => {
+    if (white) parts.push({ num: `${n}.` });
+    else if (i === 0) parts.push({ num: `${n}…` });
+    parts.push({ ply: pl, i });
+    if (!white) n++;
+    white = !white;
+  });
+  return parts;
+}
+
+// ---------- board ----------
+function boardAtStart(movable) {
+  const p = cur;
+  const c = new Chess(p.fen);
+  cg.set({
+    fen: p.fen,
+    orientation: p.color,
+    turnColor: p._turn,
+    lastMove: p.last ? sq(p.last) : undefined,
+    check: c.inCheck() ? p._turn : false,
+    movable: { color: movable ? p._turn : undefined, dests: movable ? p._dests : new Map(), events: { after: onMove } },
+  });
+  cg.setAutoShapes(st.hinted && movable ? [{ orig: p.best.slice(0, 2), brush: "green" }] : []);
+  st.viewing = null;
+}
+
+function showPly(key) {
+  const [which, idx] = key.split(":");
+  const pl = st.lines[which][Number(idx)];
+  cg.set({ fen: pl.fen, lastMove: [pl.from, pl.to], check: pl.check, turnColor: turnOf(pl.fen), movable: { color: undefined, dests: new Map() } });
+  cg.setAutoShapes([]);
+  st.viewing = key;
+  document.querySelectorAll(".mv").forEach((b) => b.classList.toggle("on", b.dataset.k === key));
+}
+
+function onMove(orig, dest) {
+  const p = cur;
+  let uci = orig + dest;
+  if (!p.moves[uci]) uci = p.moves[uci + "q"] ? uci + "q" : Object.keys(p.moves).find((u) => u.startsWith(uci)) || uci;
+  const m = p.moves[uci];
+  if (!m) { boardAtStart(true); return; }
+  const after = line(p.fen, [uci])[0];
+  cg.set({ fen: after.fen, lastMove: [orig, dest], turnColor: other(p._turn), check: after.check, movable: { color: undefined, dests: new Map() } });
+  const loss = p._best - m[0];
+  const ok = loss <= PASS;
+  st.result = { uci, san: after.san, w: m[0], ok };
+  if (!st.recorded) {
+    st.recorded = true;
+    const clean = ok && !st.hinted;
+    record(p, clean);
+    session.done++;
+    if (clean) session.ok++;
+  }
+  const reply = m[1][0];
+  cg.setAutoShapes(!ok && reply ? [{ orig: reply.slice(0, 2), dest: reply.slice(2, 4), brush: "red" }] : []);
+  renderPanel();
+  renderStats();
+}
+
+// ---------- rendering ----------
+function load(p) {
+  cur = p;
+  st = { recorded: false, hinted: false, solution: false, result: null, viewing: null, lines: {} };
+  if (!p) { renderPanel(); renderMeta(); return; }
+  const dests = new Map();
+  for (const u of Object.keys(p.moves)) {
+    const [f, t] = sq(u);
+    if (!dests.has(f)) dests.set(f, []);
+    if (!dests.get(f).includes(t)) dests.get(f).push(t);
+  }
+  p._dests = dests;
+  p._turn = turnOf(p.fen);
+  p._best = Math.max(...Object.values(p.moves).map((m) => m[0]));
+  p._good = Object.values(p.moves).filter((m) => p._best - m[0] <= PASS).length;
+  p._total = Object.keys(p.moves).length;
+  boardAtStart(true);
+  renderPanel();
+  renderMeta();
+  renderStats();
+}
+
+function next() { load(pickNext()); }
+
+function meter(label, w, cls) {
+  return `<div class="meter-row"><span>${label}</span><div class="bar"><i class="${cls}" style="width:${Math.max(2, Math.min(100, w))}%"></i></div><b>${pct(w)}</b></div>`;
+}
+
+function lineHtml(which, title, ucis) {
+  const plies = line(cur.fen, ucis);
+  st.lines[which] = plies;
+  if (!plies.length) return "";
+  const parts = numbered(cur.fen, plies).map((x) =>
+    x.num ? `<span class="num">${x.num}</span>` : `<button class="mv" data-k="${which}:${x.i}">${esc(x.ply.san)}</button>`).join("");
+  return `<div class="line"><h4>${title}</h4><div class="moves">${parts}</div></div>`;
+}
+
+function renderPanel() {
+  const panel = $("#panel");
+  const p = cur;
+  if (!p) {
+    panel.innerHTML = `<p class="empty">Под этот фильтр позиций нет. Сними часть фильтров выше.</p>`;
+    return;
+  }
+  const lastSan = p.lastSan ? `<span class="san">${esc(p.lastSan)}</span>` : "";
+  const ask = p.kind === "missed"
+    ? `Соперник только что ошибся: ${lastSan}. В партии ты этим не воспользовался. Найди ход, который забирает преимущество.`
+    : `Соперник сыграл ${lastSan || "ход"}. В партии ты здесь ошибся. Сначала проверь, что он грозит и что останется без защиты после твоего хода, потом ходи.`;
+  let html = `<div class="task">
+    <div class="eyebrow"><span class="tag ${p.kind}">${KIND[p.kind]}</span><span class="ph">${PHASE[p.phase]} · ${p.moveNo}-й ход</span></div>
+    <h2>Ход ${SIDE[p._turn]}</h2>
+    <p>${ask}</p>
+  </div>`;
+
+  const r = st.result;
+  if (r) {
+    const bestSan = sanOf(p.fen, p.best);
+    const isBest = r.uci === p.best;
+    if (r.ok) {
+      html += `<div class="result ok"><h3>${st.hinted ? "Верно, с подсказкой" : "Верно"}: <span class="san">${esc(r.san)}</span></h3>
+        <p>${isBest ? "Это лучший ход по оценке движка." : `Движок чуть больше любит <span class="san">${esc(bestSan)}</span>, но твой ход тоже держит позицию.`}
+        ${p.kind === "blunder" ? ` Надёжных ходов здесь было ${p._good} из ${p._total}.` : ""}</p></div>`;
+    } else {
+      const reply = p.moves[r.uci][1][0];
+      const replySan = reply ? sanOf(line(p.fen, [r.uci])[0].fen, reply) : null;
+      html += `<div class="result fail"><h3>Не то: <span class="san">${esc(r.san)}</span></h3>
+        <p>${replySan ? `Соперник отвечает <span class="san">${esc(replySan)}</span> (красная стрелка), и` : "После этого хода"} шансы падают до ${pct(r.w)}.</p></div>`;
+    }
+    html += `<div class="meter">
+      ${meter("лучший ход", p._best, "good")}
+      ${meter("твой ход", r.w, r.ok ? "good" : "bad")}
+      ${meter("в партии", p.moves[p.played][0], "bad")}
+    </div>
+    <p class="hint">Шансы на победу после хода, по оценке Stockfish. Засчитывается ход не хуже лучшего на ${PASS}%.</p>`;
+  }
+
+  if (r && (r.ok || st.solution)) {
+    html += `<div class="lines">
+      ${lineHtml("best", "Лучший вариант", [p.best, ...p.moves[p.best][1]])}
+      ${r.uci !== p.best ? lineHtml("mine", "Твой ход", [r.uci, ...p.moves[r.uci][1]]) : ""}
+      ${p.played !== r.uci ? lineHtml("game", "Что было в партии", [p.played, ...p.moves[p.played][1]]) : ""}
+    </div>`;
+  } else if (r) {
+    html += `<div class="lines">${lineHtml("mine", "Почему плохо", [r.uci, ...p.moves[r.uci][1]])}</div>`;
+  }
+
+  html += `<div class="actions">`;
+  if (!r) {
+    html += `<button class="btn" id="hint" ${st.hinted ? "disabled" : ""}>Подсказка</button>
+      <button class="btn quiet" id="skip">Пропустить</button>`;
+  } else if (r.ok || st.solution) {
+    html += `<button class="btn primary" id="next">Дальше</button>
+      <button class="btn" id="reset">К позиции</button>`;
+  } else {
+    html += `<button class="btn primary" id="retry">Ещё раз</button>
+      <button class="btn" id="solve">Показать решение</button>
+      <button class="btn quiet" id="next">Дальше</button>`;
+  }
+  html += `</div>`;
+  if (!r) html += `<p class="hint">Подсказка подсветит фигуру, которой надо ходить; такая позиция вернётся на повтор.</p>`;
+  if (r) html += `<p class="hint">Нажми на ход в варианте, чтобы увидеть позицию на доске.</p>`;
+  panel.innerHTML = html;
+
+  $("#hint")?.addEventListener("click", () => { st.hinted = true; cg.setAutoShapes([{ orig: p.best.slice(0, 2), brush: "green" }]); renderPanel(); });
+  $("#skip")?.addEventListener("click", next);
+  $("#next")?.addEventListener("click", next);
+  $("#retry")?.addEventListener("click", () => { st.result = null; boardAtStart(true); renderPanel(); });
+  $("#solve")?.addEventListener("click", () => {
+    st.solution = true;
+    boardAtStart(false);
+    cg.setAutoShapes([
+      { orig: p.best.slice(0, 2), dest: p.best.slice(2, 4), brush: "green" },
+      { orig: p.played.slice(0, 2), dest: p.played.slice(2, 4), brush: "red" },
+    ]);
+    renderPanel();
+  });
+  $("#reset")?.addEventListener("click", () => {
+    boardAtStart(false);
+    cg.setAutoShapes([{ orig: p.best.slice(0, 2), dest: p.best.slice(2, 4), brush: "green" }]);
+    document.querySelectorAll(".mv").forEach((b) => b.classList.remove("on"));
+  });
+  panel.querySelectorAll(".mv").forEach((b) => b.addEventListener("click", () => showPly(b.dataset.k)));
+}
+
+function renderMeta() {
+  const p = cur;
+  if (!p) { $("#meta").innerHTML = ""; return; }
+  const d = new Date(p.date).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  $("#meta").innerHTML = `<span>${esc(d)} · против ${esc(p.opp)}${p.oppRating ? ` (${p.oppRating})` : ""}</span>
+    <span>${esc(p.opening)}</span>
+    <a href="https://lichess.org/${esc(p.game)}/${p.color}#${p.ply - 1}" target="_blank" rel="noopener">Партия на Lichess ↗</a>`;
+}
+
+function renderStats() {
+  const now = Date.now();
+  const pool = puzzles.filter((p) => match(p));
+  const seen = pool.filter((p) => prog[p.id]);
+  const due = seen.filter((p) => prog[p.id].due <= now).length;
+  const learned = seen.filter((p) => (prog[p.id].box || 0) >= 3).length;
+  const stat = (n, label) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
+  $("#stats").innerHTML = [
+    stat(pool.length, "позиций в подборке"),
+    stat(pool.length - seen.length, "ещё не решал"),
+    stat(due, "на повтор сейчас"),
+    stat(learned, "выучено (3+ раза подряд)"),
+    stat(`${session.ok}/${session.done}`, "верно за сессию"),
+  ].join("");
+}
+
+function renderFilters() {
+  const count = (key, val) => puzzles.filter((p) => match(p, { ...filt, [key]: val })).length;
+  const group = (key, label, opts) => `<div class="group" role="group" aria-label="${label}"><span class="group-label">${label}</span>${
+    opts.map(([v, t]) => `<button class="chip" data-key="${key}" data-val="${v}" aria-pressed="${filt[key] === v}">${t}<small>${count(key, v)}</small></button>`).join("")}</div>`;
+  $("#filters").innerHTML =
+    group("kind", "Тип", [["all", "Все"], ["blunder", "Не зевни"], ["missed", "Накажи"]]) +
+    group("phase", "Стадия", [["all", "Все"], ["opening", "Дебют"], ["middlegame", "Миттельшпиль"], ["endgame", "Эндшпиль"]]) +
+    group("color", "Цвет", [["all", "Все"], ["white", "Белые"], ["black", "Чёрные"]]);
+  $("#filters").querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
+    filt = { ...filt, [b.dataset.key]: b.dataset.val };
+    lsSet(LS_FILTER, filt);
+    renderFilters();
+    if (!cur || !match(cur) || st.result) next(); else renderStats();
+  }));
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea")) return;
+  if ((e.key === "ArrowRight" || e.key === "Enter") && $("#next")) { e.preventDefault(); next(); }
+});
+
+// ---------- start ----------
+window.claude?.hot?.snapshot?.(() => ({ id: cur?.id }));
+
+async function start(data = {}) {
+  try {
+    const res = await fetch("puzzles.json");
+    if (!res.ok) throw new Error(res.status);
+    puzzles = await res.json();
+  } catch {
+    $("#panel").innerHTML = `<p class="empty">Не удалось загрузить позиции. Обнови страницу.</p>`;
+    return;
+  }
+  renderFilters();
+  const keep = data.id && puzzles.find((p) => p.id === data.id);
+  load(keep || pickNext());
+  connectStore().catch(() => {});
+}
+
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>
