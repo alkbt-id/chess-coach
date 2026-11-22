@@ -1047,16 +1047,29 @@ function inlineMove(n, cur, force) {
 function commentHtml(n, cur) {
   return n.comment ? `<span class="cmt rich${n.id === cur ? " active-c" : ""}">${md(n.comment)}</span>` : "";
 }
+// A side line goes in parentheses (Lichess "renderInlined") only when it is short and plain: the only
+// alternative, no forks, no comments, no title. Any other fork ends the row, and every branch — the
+// main continuation first — gets its own indented row with a tree connector (Lichess "lines").
+function plainLine(n, max = 8) {
+  for (let i = 0; n; i++, n = n.children[0]) {
+    if (i >= max || n.comment || n.label || n.children.length > 1) return false;
+  }
+  return true;
+}
+function linesHtml(nodes, cur) {
+  return `<div class="lines">${nodes.map((n) => `<div class="line">${seqHtml(n, cur)}</div>`).join("")}</div>`;
+}
 function seqHtml(first, cur) {
   let h = inlineMove(first, cur, true) + commentHtml(first, cur);
   let n = first;
   let force = !!first.comment;
   while (n.children.length) {
-    const main = n.children[0];
+    const [main, ...alts] = n.children;
+    if (alts.length > 1 || (alts.length && !plainLine(alts[0]))) return h + linesHtml(n.children, cur);
     h += inlineMove(main, cur, force);
     force = false;
     if (main.comment) { h += commentHtml(main, cur); force = true; }
-    for (const a of n.children.slice(1)) { h += `<span class="paren">(${seqHtml(a, cur)})</span> `; force = true; }
+    if (alts.length) { h += `<span class="paren">(${seqHtml(alts[0], cur)})</span> `; force = true; }
     n = main;
   }
   return h;
@@ -1075,7 +1088,7 @@ function treeHtml(root, cur) {
     needIdx = false;
     if (main.comment || alts.length) {
       if (white) h += '<span class="tm empty"></span>';
-      h += `<div class="inter">${commentHtml(main, cur)}${alts.map((a) => `<div class="vline">${seqHtml(a, cur)}</div>`).join("")}</div>`;
+      h += `<div class="inter">${commentHtml(main, cur)}${alts.length ? linesHtml(alts, cur) : ""}</div>`;
       needIdx = true;
     }
     node = main;

@@ -181,8 +181,14 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .tview .tm.empty { cursor: default; color: var(--muted); font-weight: 400; }
 .tview .tm.empty:hover { background: none; }
 .tview .inter { grid-column: 1 / -1; background: var(--surface-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 6px 10px; display: grid; gap: 5px; font-size: 13px; }
-.tview .vline { font-family: var(--font-mono); line-height: 1.7; padding-left: 10px; border-left: 2px solid var(--line); }
-.tview .vline .vm, .tview .paren .vm { cursor: pointer; font-weight: 600; border-radius: 3px; padding: 0 2px; }
+/* branches: one row per branch, joined by a tree connector (├ for each, └ for the last) */
+.tview .lines { margin-left: 2px; }
+.tview .lines .lines { margin-top: 2px; }
+.tview .line { position: relative; padding: 1px 0 3px 16px; font-family: var(--font-mono); line-height: 1.7; }
+.tview .line::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--muted); opacity: .45; }
+.tview .line:last-child::before { bottom: auto; height: calc(.85em + 1px); }
+.tview .line::after { content: ""; position: absolute; left: 0; top: calc(.85em + 1px); width: 11px; border-top: 1.5px solid var(--muted); opacity: .45; }
+.tview .line .vm, .tview .paren .vm { cursor: pointer; font-weight: 600; border-radius: 3px; padding: 0 2px; }
 .tview .vm:hover { background: var(--accent-soft); }
 .tview .vm.active { background: var(--accent-bg); color: var(--accent-ink); }
 .tview .num { color: var(--muted); font-weight: 400; }
@@ -190,7 +196,7 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .tview .paren .vm { color: var(--ink); }
 .cmt { font-family: var(--font-body); font-weight: 400; color: var(--ink); }
 .tview .inter > .cmt { line-height: 1.5; }
-.vline .cmt, .paren .cmt { color: var(--muted); font-size: 12.5px; }
+.tview .line .cmt, .tview .paren .cmt { color: var(--muted); font-size: 12.5px; }
 .cmt.active-c { background: var(--accent-soft); border-radius: 4px; }
 .lbl { font: 600 10px var(--font-body); letter-spacing: .04em; text-transform: uppercase; background: var(--warn-soft); color: var(--warn); border-radius: 4px; padding: 1px 5px; margin-right: 3px; }
 .tm.active .lbl { background: rgba(255,255,255,.25); color: inherit; }
