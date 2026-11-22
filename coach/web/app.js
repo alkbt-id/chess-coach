@@ -856,13 +856,51 @@ function seqLine(seq) {
   return seq._res.line;
 }
 
+// The line on the board, as position keys: the tree from its root to the position shown and on along its main line
+// (where → goes), with the game's moves before the board; a previewed line from text or a tried line replaces the
+// tree after the node it starts from. Its moves get a frame in text, so every place that refers to it stands out.
+// None during the repertoire drill: the frame would give away the moves to play from memory.
+function boardLineKeys() {
+  const keys = new Set();
+  if (rep.drill) return keys;
+  const sc = mode === "study" ? scene() : null;
+  const root = sc ? sc.root : mode === "puzzle" ? pz.st?.tree : null;
+  const fromRoot = (hit) => { // the nodes from the root to the first node `hit` accepts (main line first)
+    const walk = (n) => {
+      if (hit(n)) return [n];
+      for (const c of n.children) { const r = walk(c); if (r) return [n, ...r]; }
+      return null;
+    };
+    return root ? walk(root) || [] : [];
+  };
+  const tried = sc && rep.on ? repTrial() : null;
+  let nodes, after = [];
+  if (preview) {
+    const k = fenKey(preview.start);
+    nodes = fromRoot((n) => fenKey(n.fen) === k);
+    after = [{ fen: preview.start }, ...preview.plies];
+  } else if (tried) {
+    nodes = fromRoot((n) => n === tried.base);
+    after = tried.plies;
+  } else {
+    const cur = sc ? curNode() : null, k = fenKey(shownFen);
+    nodes = fromRoot(cur ? (n) => n === cur : (n) => fenKey(n.fen) === k);
+    for (let n = nodes.at(-1)?.children[0]; n; n = n.children[0]) nodes.push(n);
+  }
+  if (sc && nodes[0] === root) histOf(sc)?.plies.forEach((p) => keys.add(fenKey(p.fen)));
+  for (const x of [...nodes, ...after]) keys.add(fenKey(x.fen));
+  return keys;
+}
+
 function highlightMoves() {
   const key = fenKey(shownFen);
+  const onLine = boardLineKeys();
   for (const seq of $$(".mseq")) {
     const line = seqLine(seq);
     $$(".mvl", seq).forEach((t, i) => {
-      const ply = line?.plies?.[i];
-      t.classList.toggle("on", !!ply && fenKey(ply.fen) === key);
+      const k = line?.plies?.[i] ? fenKey(line.plies[i].fen) : null;
+      t.classList.toggle("on", !!k && k === key);
+      t.classList.toggle("path", !!k && k !== key && onLine.has(k));
     });
   }
 }
@@ -1054,12 +1092,29 @@ function followChat() {
 const glyphHtml = (n) => (n.glyph ? `<span class="g ${GLYPH_CLASS[n.glyph] || ""}">${esc(n.glyph)}</span>` : "");
 const labelHtml = (n) => (n.label ? `<span class="lbl">${esc(n.label)}</span>` : "");
 function idxCell(num) { return `<span class="ix">${esc(num.replace(/[.…]$/, ""))}</span>`; }
+// The tree's moves on the line of the current move: from the start to it and on along the main line (where → goes).
+// They get a frame, as in text, so the way to the current move stands out among the branches (set while a tree renders).
+let treeLine = null;
+function lineIds(root, cur) {
+  const ids = new Set();
+  let at = null;
+  const walk = (n) => {
+    if (n.id === cur) { at = n; return true; }
+    for (const c of n.children) if (walk(c)) { ids.add(c.id); return true; }
+    return false;
+  };
+  if (!walk(root)) return ids;
+  ids.delete(cur);
+  if (rep.trial?.base !== cur) for (let n = at.children[0]; n; n = n.children[0]) ids.add(n.id); // a tried line goes elsewhere
+  return ids;
+}
+const pathCls = (n) => (treeLine?.has(n.id) ? " path" : "");
 function treeMove(n, cur) {
-  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
+  return `<span class="tm${n.id === cur ? " active" : pathCls(n)}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
 }
 function inlineMove(n, cur, force) {
   const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
-  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)}${askHtml(n)} `;
+  return `${num}<span class="vm${n.id === cur ? " active" : pathCls(n)}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)}${askHtml(n)} `;
 }
 // «Спросить Claude» right after the user's move on screen, where the played line is (set only while the board's tree renders)
 let askAt = null;
@@ -1152,6 +1207,7 @@ function seqHtml(first, cur, rest = false) {
 function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
   fold = { key, set: foldSet(key), moved: foldShown.get(key) !== cur, dirty: false };
+  treeLine = lineIds(root, cur);
   let h = `<div class="tview" data-tree="${esc(key)}">`;
   let node = root;
   let needIdx = true;
@@ -1172,6 +1228,7 @@ function treeHtml(root, cur, key = root.fen || root.id) {
   foldShown.set(key, cur);
   if (fold.dirty) saveFold(key, fold.set);
   fold = null;
+  treeLine = null;
   return `${h}</div>`;
 }
 
