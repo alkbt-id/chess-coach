@@ -215,6 +215,13 @@ select.all-boards { width: 100px; font-size: 12px; color: var(--muted); backgrou
 .tm.active .lbl { background: rgba(255,255,255,.18); color: inherit; opacity: .85; }
 .user { color: var(--user-move); }
 .tm.active.user { color: var(--accent-ink); }
+/* «Спросить Claude» right after the user's move on screen: in the colour of the user's moves, filled, so it stands out */
+.ask-inline { display: inline-block; vertical-align: 1px; margin: 0 2px 0 8px; padding: 2px 11px; border: 0; border-radius: 999px; cursor: pointer;
+  background: var(--user-move); color: var(--surface); font: 650 12px/1.5 var(--font-body);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--user-move) 28%, transparent); }
+.ask-inline::before { content: "✦ "; }
+.ask-inline:hover { filter: brightness(1.12); }
+.tview .inter > .ask-inline { justify-self: start; margin: 2px 0; }
 .g { font-weight: 700; margin-left: 1px; }
 .g-good { color: #22ac38; } .g-brill { color: #168226; } .g-mist { color: #e69f00; } .g-blun { color: #df5353; } .g-int { color: #ea45d8; } .g-dub { color: #56b4e9; }
 .tm.active .g { color: inherit; }

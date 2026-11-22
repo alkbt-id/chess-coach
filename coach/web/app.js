@@ -1048,8 +1048,13 @@ function treeMove(n, cur) {
 }
 function inlineMove(n, cur, force) {
   const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
-  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)} `;
+  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>${labelHtml(n)}${askHtml(n)} `;
 }
+// «Спросить Claude» right after the user's move on screen, where the played line is (set only while the board's tree renders)
+let askAt = null;
+const askHtml = (n) => (n.id === askAt
+  ? `<button type="button" class="ask-inline" id="ask-line" title="Один вопрос Claude про все твои ходы подряд до этого хода">Спросить Claude</button>`
+  : "");
 function commentHtml(n, cur) {
   return n.comment ? `<span class="cmt rich${n.id === cur ? " active-c" : ""}">${md(n.comment)}</span>` : "";
 }
@@ -1146,9 +1151,9 @@ function treeHtml(root, cur, key = root.fen || root.id) {
     if (white) h += idxCell(main.num) + treeMove(main, cur);
     else { if (needIdx) h += `${idxCell(main.num)}<span class="tm empty">…</span>`; h += treeMove(main, cur); }
     needIdx = false;
-    if (main.comment || alts.length) {
+    if (main.comment || alts.length || main.id === askAt) {
       if (white) h += '<span class="tm empty"></span>';
-      h += `<div class="inter">${commentHtml(main, cur)}${alts.length ? linesHtml(alts, cur) : ""}</div>`;
+      h += `<div class="inter">${askHtml(main)}${commentHtml(main, cur)}${alts.length ? linesHtml(alts, cur) : ""}</div>`;
       needIdx = true;
     }
     node = main;
@@ -1242,6 +1247,9 @@ function studyPanelHtml() {
   }
   // one row: the tabs of this chat's boards (or of the boards without a chat) — switching them never changes the chat;
   // «Все доски» reaches every board, and a board of another chat comes with its chat
+  askAt = curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) && !isLive() ? study.node : null;
+  const tree = treeHtml(sc.root, study.node, sc.id);
+  askAt = null;
   const where = chatOf(sc) ? "чата" : "без чата";
   const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски ${where}"><span class="bt-label">Доски ${where}:</span>
       ${scopeBoards(sc).map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
@@ -1254,8 +1262,7 @@ function studyPanelHtml() {
     ${reviewHtml(sc)}
     ${cevalHtml()}
     ${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
-    ${treeHtml(sc.root, study.node, sc.id) || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}
-    ${curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) ? `<button type="button" class="btn small" id="ask-line">Спросить Claude про этот вариант</button>` : ""}
+    ${tree || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}
     <div class="legend">
       <div><span class="lg-cur">ход</span> — позиция, что сейчас на доске; нажми на любой ход, чтобы перейти к нему</div>
       <div><span class="user">ход</span> — твои ходы, <b>ход</b> — ходы Claude; текст под ходом — комментарий Claude</div>
