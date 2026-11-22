@@ -3852,6 +3852,7 @@ function repGamesHtml(s) {
       <span class="res ${g.outcome}">${RG_RESULT[g.outcome] || ""}</span><span class="rg-chk ${g.check.kind === "user" && !g.check.learned ? "habit" : g.check.kind}">${esc(rgCheckText(g.check))}</span></button>`).join("");
   return `<details class="rep-games"${rep.gamesOpen ? " open" : ""}><summary>Партии в этом дебюте: ${d.games} · ты уходил из дерева ${c.user || 0} · соперник ${c.opponent || 0}</summary>
     <p class="hint">Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход считается ошибкой, только если партия сыграна после того, как ход записан в дерево; более ранние партии — «раньше играл иначе». Ход соперника — ответ, который стоит подготовить.</p>
+    <p class="hint rg-legend"><span class="k tree">синие</span> — ходы из твоего дерева; подчёркнут ход не по дереву: <span class="k user">красный</span> — ты ушёл, уже зная ход, <span class="k habit">серый</span> — раньше играл иначе, <span class="k opp">жёлтый</span> — ход соперника, которого в дереве нет. Наведи на ход — покажу позицию.</p>
     ${group("user", "Где ты уходишь из дерева")}${group("habit", "Раньше играл иначе — до того, как ход появился в дереве")}${group("opponent", "Ходы соперников, на которые в дереве нет ответа")}${group("end", "Где кончается подготовка")}
     <h3>Последние партии</h3><div class="rg-games">${recent}</div></details>`;
 }

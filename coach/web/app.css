@@ -530,7 +530,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .rg-row .rg-n { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .rg-row .rg-act { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .rg-chk.user { color: var(--bad); }
-.rg-chk.opponent { color: var(--accent); }
+.rg-chk.opponent { color: var(--warn); }
 .rg-chk.end, .rg-chk.in { color: var(--good); }
 .rg-exp { color: var(--muted); }
 .rg-games { display: grid; gap: 2px; }
@@ -545,9 +545,15 @@ a.btn { text-decoration: none; display: inline-block; }
 .rep-after.opponent { border-color: var(--accent); }
 .rep-after.end, .rep-after.in { border-color: var(--good); }
 .rg-chk.habit { color: var(--muted); }
-.mvl.rl-hl { color: var(--bad); }
-.rg-row.opponent .mvl.rl-hl { color: var(--accent); }
+/* the move that left the tree: underlined; red = the user's after it was written, grey = before (a habit), amber = the opponent's */
+.mvl.rl-hl { color: var(--bad); text-decoration: underline dotted; text-underline-offset: 3px; }
+.rg-row.opponent .mvl.rl-hl { color: var(--warn); }
 .rg-row.habit .mvl.rl-hl { color: var(--muted); }
+.rg-legend .k { font-family: var(--font-mono); font-weight: 600; }
+.rg-legend .k.tree { color: var(--accent); }
+.rg-legend .k.user { color: var(--bad); text-decoration: underline dotted; }
+.rg-legend .k.habit { color: var(--muted); text-decoration: underline dotted; }
+.rg-legend .k.opp { color: var(--warn); text-decoration: underline dotted; }
 .rchip-wrap { display: inline-flex; align-items: stretch; }
 .rchip-wrap .rchip { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0; }
 .rchip-x { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 0 999px 999px 0; padding: 0 8px; cursor: pointer; font-size: 12px; }
