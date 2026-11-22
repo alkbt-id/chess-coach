@@ -1928,10 +1928,10 @@ const TOOL_LABEL = {
 const HIDDEN_TOOLS = new Set(["ToolSearch", "TodoWrite"]);
 const curChat = () => ch.list.find((c) => c.id === ch.cur) || null;
 
-// closed tabs are remembered in this window only; the chats themselves stay on the server
+// closed tabs are kept on the server (settings.closed_chats), so the Mac window and the iPad show the same tabs;
+// the chats themselves stay either way
 let closedChats = new Set();
-try { closedChats = new Set(JSON.parse(localStorage.getItem("chat.closed") || "[]")); } catch {}
-const saveClosed = () => { try { localStorage.setItem("chat.closed", JSON.stringify([...closedChats])); } catch {} };
+const saveClosed = () => http.send("PUT", "/api/settings", { closed_chats: [...closedChats] }).catch(() => {});
 const openChats = () => ch.list.filter((c) => !closedChats.has(c.id) || c.id === ch.cur);
 
 function renderChatTabs() {
@@ -1944,8 +1944,9 @@ function renderChatTabs() {
 async function closeChatTab(id) {
   const c = ch.list.find((x) => x.id === id);
   if (!c) return;
-  const entries = ch.entries.get(id) || [];
-  if (!c.busy && !entries.length) { // an empty chat is not worth keeping
+  // an empty chat is not worth keeping; "empty" by the server's word (no Claude session yet), since a window
+  // loads a chat's entries only when it is opened (an iPad closing unopened tabs deleted real chats)
+  if (!c.busy && !c.session_id && !(ch.entries.get(id) || []).length) {
     await post(`/api/chat/${id}/delete`).catch(() => {});
     ch.list = ch.list.filter((x) => x.id !== id);
     ch.entries.delete(id);
@@ -2918,6 +2919,10 @@ async function onEvent(ev) {
     }
     case "chat_list": case "chat_entry": case "chat_delta": onChatEvent(ev); break;
     case "reload": location.reload(); break;
+    case "closed_chats": // a tab closed or reopened in another window (the Mac or the iPad)
+      closedChats = new Set(ev.ids || []);
+      renderChatTabs();
+      break;
     case "eval": { // test harness: only a server started with COACH_DEBUG=1 sends this
       let result;
       try { result = await new Function(`return (async () => { ${ev.js} })()`)(); } catch (err) { result = `error: ${err.message}`; }
@@ -2961,6 +2966,11 @@ async function init() {
     let saved = null, open = "1";
     try { saved = localStorage.getItem("chat.cur"); open = localStorage.getItem("chat.open") ?? "1"; } catch {}
     setChatOpen(open !== "0");
+    if (Array.isArray(s.settings.closed_chats)) closedChats = new Set(s.settings.closed_chats);
+    else { // the first start since closed tabs moved to the server: this window's own list, if it has one
+      try { closedChats = new Set(JSON.parse(localStorage.getItem("chat.closed") || "[]")); } catch {}
+      if (closedChats.size) saveClosed();
+    }
     const openList = ch.list.filter((c) => !closedChats.has(c.id));
     await openChat(openList.some((c) => c.id === saved) ? saved : openList[0]?.id || null);
     renderJobChip();

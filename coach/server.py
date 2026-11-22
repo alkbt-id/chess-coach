@@ -127,8 +127,11 @@ async def put_progress(request: Request):
 
 
 async def put_settings(request: Request):
-    S.settings.update(await body(request))
+    b = await body(request)
+    S.settings.update(b)
     S.save_settings()
+    if "closed_chats" in b:  # the other windows (the Mac, the iPad) update their chat tabs
+        await broadcast({"type": "closed_chats", "ids": S.settings["closed_chats"]})
     return JSONResponse({"ok": True})
 
 
