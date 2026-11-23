@@ -292,7 +292,7 @@ function layout() {
   const L = $("#layout");
   if (!L.clientWidth) return;
   const W = L.clientWidth - LAY.padX;
-  const H = L.clientHeight - LAY.padY - LAY.meta - ($("#nav").offsetHeight + 4); // the move buttons under the board
+  const H = L.clientHeight - LAY.padY - LAY.meta - ($("#nav").offsetHeight + 4) - ($("#btabs").offsetHeight ? $("#btabs").offsetHeight + 4 : 0); // the move buttons under the board, the tabs over it
   const chatOn = !L.classList.contains("no-chat");
   const evalW = $("#evalbar").hidden ? 0 : 22;
   const gut = LAY.gutter * (chatOn ? 2 : 1);
@@ -582,6 +582,12 @@ $("#pmenu").addEventListener("click", async (e) => {
   if (!b || b.disabled) return;
   let keep = false;
   try { keep = await pmenu.on?.(b.dataset.act, b); } catch (err) { setStatus(String(err.message), true); }
+  if (!keep) closeMenu();
+});
+$("#pmenu").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  let keep = false;
+  try { keep = await pmenu.on?.("submit", e.target); } catch (err) { setStatus(String(err.message), true); }
   if (!keep) closeMenu();
 });
 document.addEventListener("click", (e) => {
@@ -1624,51 +1630,115 @@ function renderEvalBar() {
 function studyPanelHtml() {
   if (rep.on) return repPanelHtml();
   const sc = scene();
-  const newpos = `<form class="newpos" id="newpos-form"${study.newpos || !sc ? "" : " hidden"}>
-      <input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
-  if (!sc) { // a chat without a board, or no boards yet: every board stays reachable
-    const list = study.scenes.some((s) => !s.rep) ? `<div class="board-tabs"><span class="bt-end">${allBoardsHtml()}</span></div>` : "";
-    return `${list}<div class="empty"><h2>Анализ</h2>
-      <p>Здесь будут позиции и варианты, которые показывает Claude, и твои собственные ходы — как на анализе Lichess.</p>
-      <p>Двигай фигуры, чтобы начать свободный анализ, или задай позицию:</p></div>${newpos}${cevalHtml()}`;
+  if (!sc) { // a chat without a board, or no boards yet: the tabs row above the board keeps every board reachable
+    return `<div class="p-head"><div class="p-title"><h1 class="title">Анализ</h1></div></div>
+      <p class="hint">Двигай фигуры на доске или задай позицию:</p>
+      <form class="newpos" id="newpos-form"><input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn primary" type="submit">Создать</button></form>
+      ${cevalHtml()}`;
   }
-  // one row: the tabs of this chat's boards (or of the boards without a chat) — switching them never changes the chat;
-  // «Все доски» reaches every board, and a board of another chat comes with its chat
   askAt = curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) && !isLive() ? study.node : null;
   menuAt = study.node;
   const tree = treeHtml(sc.root, study.node, sc.id);
   askAt = menuAt = null;
-  const where = chatOf(sc) ? "чата" : "без чата";
-  const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски ${where}"><span class="bt-label">Доски ${where}:</span>
-      ${scopeBoards(sc).map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
-      <button type="button" class="btab add" id="board-add" title="${chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска"}: начальная позиция, FEN или ходы">＋ доска</button>
-      <span class="bt-end">${allBoardsHtml()}<button type="button" class="icon" id="scene-del" title="Удалить эту доску">✕</button></span></div>`;
-  return `${tabs}
-    ${newpos}
-    <h1 class="title">${esc(sc.title)}</h1>
-    ${playersHtml(sc)}
+  return `<div class="p-head"><div class="p-title"><h1 class="title">${esc(sc.title)} ${helpBtn("study")}</h1>${playersHtml(sc)}</div>
+      ${dotsBtn("board-menu", "FEN, партия на Lichess, удалить доску")}</div>
+    ${helpText("study", `Нажми на ход, чтобы перейти к нему; <span class="kbd">←</span><span class="kbd">→</span> по ходам, <span class="kbd">⇧↑</span><span class="kbd">⇧↓</span> между вариантами.
+      <span class="user">Жёлтые</span> — твои ходы, белые — ходы Claude; текст под ходом — комментарий Claude.
+      <span class="g g-good">!</span> хороший ход · <span class="g g-mist">?</span> ошибка · <span class="g g-blun">??</span> грубая ошибка · <span class="g g-int">!?</span> интересно.
+      Отступ — побочный вариант: <b>−</b> сворачивает, <b>+</b> разворачивает. Меню хода — правый клик, долгое нажатие или ⋯ на текущем ходе.`)}
     ${reviewHtml(sc)}
     ${cevalHtml()}
     ${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
-    ${tree || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}
-    <div class="legend">
-      <div><span class="lg-cur">ход</span> — позиция, что сейчас на доске; нажми на любой ход, чтобы перейти к нему</div>
-      <div><span class="user">ход</span> — твои ходы, <b>ход</b> — ходы Claude; текст под ходом — комментарий Claude</div>
-      <div><span class="g g-good">!</span> хороший ход · <span class="g g-mist">?</span> ошибка · <span class="g g-blun">??</span> грубая ошибка · <span class="g g-int">!?</span> интересно</div>
-      <div>Отступ — побочный вариант: <b>−</b> слева от него сворачивает, <b>+</b> разворачивает. <span class="kbd">←</span><span class="kbd">→</span> по ходам, <span class="kbd">⇧↑</span><span class="kbd">⇧↓</span> между вариантами, правый клик по ходу — меню</div>
-    </div>`;
+    ${tree || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}`;
 }
 
 // the boards the tabs show: this chat's, or the boards without a chat — never another chat
 const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s) && !s.rep));
 
-// every board, grouped by chat (like «Все чаты»): picking a board of another chat opens that chat too
-function allBoardsHtml() {
-  const groups = [...ch.list.map((c) => [c.title, boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && !s.rep)]]
+// ---- the tabs above the board: in «Разбор» the open chat's boards (or the boards without a chat), in «Репертуар»
+// the tree and the open lesson's boards; ＋ makes a board (start, FEN or moves), the list reaches every board — a
+// board of another chat comes with its chat ----
+function boardTabsHtml() {
+  if (mode !== "study" || isLive() || rep.drill || rep.game) return "";
+  const sc = scene();
+  const tab = (x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`;
+  const plus = (title) => `<button type="button" class="ibtn" id="board-add" aria-label="Новая доска" title="${title}">${ICON.plus}</button>`;
+  if (rep.on) {
+    const s = repSec();
+    const inLesson = !!s && lessonSection(ch.cur) === s.id;
+    const boards = inLesson ? boardsOf(ch.cur) : [];
+    if (!inLesson) return "";
+    return `<div class="bt-scroll"><button type="button" class="btab${sc?.rep ? " on" : ""}" data-rep-tree>Дерево репертуара</button>${boards.map(tab).join("")}</div>${plus("Ещё одна доска этого урока")}`;
+  }
+  const any = study.scenes.some((x) => !x.rep);
+  return `<div class="bt-scroll">${sc ? scopeBoards(sc).map(tab).join("") : ""}</div>${plus(chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска")}
+    ${any ? `<button type="button" class="ibtn" id="all-boards" aria-label="Все доски" title="Все доски всех чатов">${ICON.list}</button>` : ""}`;
+}
+function renderBoardTabs() {
+  const el = $("#btabs");
+  const h = boardTabsHtml();
+  const was = el.hidden;
+  el.innerHTML = h;
+  el.hidden = !h;
+  if (was !== el.hidden) layout();
+  $(".btab.on", el)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// every board, grouped by chat (like «Все чаты»)
+function allBoardsMenuHtml() {
+  const groups = [...ch.list.map((c) => [chatLabel(c), boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && !s.rep)]]
     .filter(([, l]) => l.length);
-  return `<select id="all-boards" class="all-boards" aria-label="Все доски" title="Все доски всех чатов: доска другого чата откроется вместе со своим чатом">
-      <option value="" selected disabled>Все доски</option>
-      ${groups.map(([t, l]) => `<optgroup label="${esc(t)}">${l.map((x) => `<option value="${esc(x.id)}">${esc(x.title)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  return groups.map(([t, l]) => `<div class="menu-head">${esc(t)}</div>${l.map((x) => `<button type="button" class="mi${x.id === study.id ? " on" : ""}" data-act="board:${esc(x.id)}">${esc(x.title)}</button>`).join("")}`).join("");
+}
+const newBoardMenuHtml = () => `<div class="menu-head">Новая доска</div>
+  <button type="button" class="mi" data-act="start">Начальная позиция</button>
+  <div class="menu-head">Из FEN или ходов</div>
+  <form class="menu-form"><input name="pos" placeholder="1.e4 e5 2.Nf3" autocomplete="off" aria-label="FEN или ходы"><button class="btn primary" type="submit">Создать</button></form>`;
+
+async function createBoard(position) {
+  try {
+    const r = await post("/api/scene", { title: "Новая позиция", position: position || "start", chat: claimChat() });
+    await waitScene(r.scene);
+    setScene(r.scene);
+  } catch (err) { setStatus(String(err.message), true); }
+}
+
+$("#btabs").addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.board) { if (t.dataset.board !== study.id) setScene(t.dataset.board); }
+  else if (t.dataset.repTree !== undefined) repShowTree();
+  else if (t.id === "board-add") {
+    openMenu(t, newBoardMenuHtml(), async (act, el) => {
+      if (act === "start") await createBoard("start");
+      else if (act === "submit") await createBoard(new FormData(el).get("pos").trim());
+    });
+    $("#pmenu input")?.focus();
+  } else if (t.id === "all-boards") openMenu(t, allBoardsMenuHtml(), (act) => { if (act.startsWith("board:")) setScene(act.slice(6)); });
+});
+
+// ⋯ of a board in «Разбор»: its FEN, its game on Lichess, deleting it (asked again in the menu)
+function boardMenu(anchor, sc) {
+  const g = sc.game || {};
+  const items = () => `<button type="button" class="mi" data-act="fen">Скопировать FEN</button>
+    ${g.url ? `<button type="button" class="mi" data-act="lichess">Партия на Lichess ↗</button>` : ""}
+    <div class="menu-sep"></div>
+    <button type="button" class="mi danger" data-act="del">Удалить доску…</button>`;
+  openMenu(anchor, items(), async (act) => {
+    if (act === "fen") { navigator.clipboard?.writeText(shownFen); setStatus("FEN скопирован"); setTimeout(() => setStatus(""), 1500); }
+    else if (act === "lichess") window.open(g.url, "_blank", "noopener");
+    else if (act === "del") { setMenu(confirmHtml(`Удалить доску «${esc(sc.title)}»?`, "Её дерево и комментарии пропадут; чат останется.", "del-yes", "Удалить")); return true; }
+    else if (act === "cancel") { setMenu(items()); return true; }
+    else if (act === "del-yes") deleteBoard(sc);
+  });
+}
+function deleteBoard(sc) {
+  const own = scopeBoards(sc);
+  const j = own.indexOf(sc);
+  study.scenes.splice(study.scenes.indexOf(sc), 1);
+  post("/api/scene/delete", { id: sc.id });
+  if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat (or without a chat)
+  else { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
 }
 
 // a game review: who had White and who had Black, the user's side marked
@@ -1698,7 +1768,7 @@ function reviewHtml(sc) {
     return `<div class="review"><p>${rv.state === "failed" ? `Разбор не удался${rv.error ? `: ${esc(rv.error)}` : ""}.` : "Разбор остановлен."}</p>
       <div class="actions"><button type="button" class="btn small primary" data-review="${esc(g.lichess || "")}">Продолжить разбор</button>${link}</div></div>`;
   }
-  return `<div class="review-actions"><button type="button" class="btn small" id="review-ask">Разобрать с Claude</button>${link}</div>`;
+  return `<div class="review-actions"><button type="button" class="btn" id="review-ask">${ICON.spark}Разобрать с Claude</button></div>`;
 }
 
 function renderStudyPanel() {
@@ -1714,6 +1784,7 @@ function renderStudy() {
   if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
   if (!preview) studyBoard();
   renderStudyPanel();
+  renderBoardTabs();
   $("#meta").innerHTML = "";
   const sc = scene();
   const e = sc ? tindex(sc).get(study.node) : null;
@@ -1750,28 +1821,11 @@ $("#panel").addEventListener("click", async (e) => {
   } else if (t.id === "review-ask") {
     const sc = scene();
     if (sc) sendToChat(claudeReviewText(sc), sc);
-  } else if (t.id === "scene-del") {
+  } else if (t.id === "board-menu") {
     const sc = scene();
-    if (!sc) return;
-    if (!t.classList.contains("confirm")) { // a second click deletes
-      t.classList.add("confirm");
-      t.textContent = "удалить?";
-      setTimeout(() => { t.classList.remove("confirm"); t.textContent = "✕"; }, 3000);
-      return;
-    }
-    const own = scopeBoards(sc);
-    const j = own.indexOf(sc);
-    study.scenes.splice(study.scenes.indexOf(sc), 1);
-    post("/api/scene/delete", { id: sc.id });
-    if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat (or without a chat)
-    else { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
-  } else if (t.id === "board-add") {
-    study.newpos = !study.newpos;
-    renderStudyPanel();
-    if (study.newpos) $("#newpos-input")?.focus();
+    if (sc) boardMenu(t, sc);
   }
 });
-$("#panel").addEventListener("change", (e) => { if (e.target.id === "all-boards") setScene(e.target.value); });
 $("#panel").addEventListener("change", (e) => {
   if (e.target.id === "lp-angle" || e.target.id === "lp-diff") {
     if (e.target.id === "lp-angle") lp.angle = e.target.value; else lp.difficulty = e.target.value;
@@ -1782,13 +1836,7 @@ $("#panel").addEventListener("change", (e) => {
 $("#panel").addEventListener("submit", async (e) => {
   if (e.target.id !== "newpos-form") return;
   e.preventDefault();
-  const v = $("#newpos-input").value.trim();
-  try {
-    const r = await post("/api/scene", { title: "Новая позиция", position: v || "start", chat: claimChat() });
-    study.newpos = false;
-    await waitScene(r.scene);
-    setScene(r.scene);
-  } catch (err) { setStatus(String(err.message), true); }
+  await createBoard($("#newpos-input").value.trim());
 });
 
 // A tree move's menu: right click, a long press (touch screens have no right click) or the ⋯ on the current move.
@@ -2798,7 +2846,7 @@ function updateSendButton() {
   btn.classList.toggle("stop", !!stop);
 }
 
-function renderChat() { renderChatTabs(); renderChatOpts(); renderChatLog(); }
+function renderChat() { renderChatTabs(); renderChatOpts(); renderChatLog(); renderBoardTabs(); }
 
 // follow: in «Разбор» the board follows the chat (its board, or an empty one for a chat without a board)
 async function openChat(id, { follow = true } = {}) {
@@ -3825,11 +3873,6 @@ function repSectionHtml(s) {
   if (tab === "games") body = repGamesHtml(s);
   else if (tab === "lessons") body = repLessonsHtml(s, lessons);
   else {
-    const boards = inLesson ? boardsOf(ch.cur) : [];
-    const btabs = !inLesson && !boards.length ? "" : `<div class="board-tabs" role="tablist" aria-label="Доски раздела"><button type="button" class="btab${onTree ? " on" : ""}" data-rep-tree>Дерево репертуара</button>
-        ${boards.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
-        ${inLesson ? `<button type="button" class="btab add" id="board-add" title="Ещё одна доска этого урока: начальная позиция, FEN или ходы">＋ доска</button>` : ""}</div>
-      <form class="newpos" id="newpos-form"${study.newpos && inLesson ? "" : " hidden"}><input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
     const help = helpText("tree", `Дерево — ходы, которые ты решил играть. Ход на доске сначала пробный: в дерево он попадёт кнопкой «Записать в репертуар».
       Меню хода — правый клик, долгое нажатие или ⋯ на текущем ходе: сделать главным, сделать разделом, удалить.
       <span class="user">Жёлтые</span> ходы сделаны тобой на доске, белые — записаны Claude или взяты из твоих партий.
@@ -3845,7 +3888,7 @@ function repSectionHtml(s) {
       main = `<h2 class="rep-sub">${esc(sc.title)}</h2>${cevalHtml()}${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
         ${boardTreeHtml(sc.root) || `<p class="hint">Ходов пока нет.</p>`}`;
     }
-    body = help + btabs + main;
+    body = help + main;
   }
   return head + repDrillButton({ section: s.id }, "drill-sec") + acts + tabs + body;
 }
@@ -4539,6 +4582,16 @@ function repToc() {
   if (!curChat()) renderChatLog();
 }
 
+// the section's tree back on the board (the first tab above the board in a lesson)
+function repShowTree() {
+  const s = repSec();
+  if (!s) return;
+  closePreviewSilently();
+  study.id = repTree(s.color)?.id ?? null;
+  study.node = s.node;
+  renderStudy();
+}
+
 // a board chosen in «Репертуар»: a lesson's board brings its lesson
 function repFollowBoard() {
   const sc = scene();
@@ -4672,13 +4725,7 @@ $("#panel").addEventListener("click", async (e) => {
       rep.game.over = { score: 0, text: "Ты сдался." };
       renderStudy();
     } else if (t.id === "game-review") await gameReview();
-    else if (t.dataset.repTree !== undefined && s) {
-      closePreviewSilently();
-      study.id = repTree(s.color)?.id ?? null;
-      study.node = s.node;
-      study.newpos = false;
-      renderStudy();
-    } else if (t.dataset.repColor) {
+    else if (t.dataset.repColor) {
       rep.color = t.dataset.repColor;
       study.id = repTree(rep.color)?.id ?? null;
       study.node = "root";
@@ -4796,6 +4843,7 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   $$(".mode").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === view)));
   $("#nav").classList.toggle("no-moves", m === "puzzle"); // a puzzle has no moves to step through: only flip (and the pencil)
   $("#ask-switch").hidden = !(m === "study" && !rep.on); // the repertoire only tries moves
+  renderBoardTabs();
   if (rep.on) repEnter();
   else if (m === "study") {
     if (scene()?.rep) { study.id = activeBoard(ch.cur)?.id ?? null; study.node = "root"; } // the repertoire stays in its mode

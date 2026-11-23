@@ -18,7 +18,7 @@
 <link rel="stylesheet" href="/static/vendor/board.lichess-brown.css">
 <link rel="stylesheet" href="/static/vendor/pieces.merida.css">
 <!-- ?v=: the iPad keeps static files cached; bump it (here and on app.js below) when app.css or app.js changes -->
-<link rel="stylesheet" href="/static/app.css?v=27">
+<link rel="stylesheet" href="/static/app.css?v=28">
 </head>
 <body>
 <div class="app">
@@ -53,6 +53,8 @@
     </aside>
     <div class="gutter" id="g2" title="Тяни, чтобы поменять ширину · двойной клик — авто"></div>
     <section class="board-col">
+      <!-- the boards of the open chat (or the repertoire tree and the lesson's boards), ＋ a new board, the list of all -->
+      <div class="btabs-top" id="btabs" role="tablist" aria-label="Доски" hidden></div>
       <div class="mat cg-wrap" id="mat-top"></div>
       <div class="board-row">
         <div class="evalbar" id="evalbar" hidden><i id="evalfill"></i><span id="evaltext"></span></div>
@@ -91,6 +93,6 @@
 <div class="menu" id="model-pop" hidden></div>
 <div class="pop" id="jobs-pop" hidden></div>
 <div class="pop" id="chats-pop" hidden></div>
-<script type="module" src="/static/app.js?v=33"></script>
+<script type="module" src="/static/app.js?v=34"></script>
 </body>
 </html>

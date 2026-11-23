@@ -98,7 +98,7 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .gutter::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 4px; width: 2px; border-radius: 2px; background: transparent; transition: background .15s; }
 .gutter:hover::after, .gutter.drag::after { background: var(--accent-bg); }
 body.resizing { cursor: col-resize; user-select: none; }
-.board-col { display: grid; grid-template-rows: auto auto auto auto 1fr; gap: 4px; min-height: 0; min-width: 0; }
+.board-col { display: grid; grid-template-rows: auto auto auto auto auto 1fr; gap: 4px; min-height: 0; min-width: 0; }
 .board-row { display: flex; gap: 6px; }
 .board-wrap { width: 480px; height: 480px; flex: none; border-radius: 3px; overflow: hidden; box-shadow: 0 10px 28px -14px rgba(0,0,0,.5); }
 #board { width: 100%; height: 100%; }
@@ -185,7 +185,6 @@ h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balanc
 .btab.add { background: none; border-style: dashed; color: var(--accent); }
 .bt-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .bt-end .icon { min-width: 28px; height: 26px; padding: 0 6px; }
-select.all-boards { width: 100px; font-size: 12px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
 .lead { font-size: 14px; }
 .newpos { display: flex; gap: 6px; }
 .newpos input { flex: 1; min-width: 0; font: 12px var(--font-mono); padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
@@ -419,7 +418,6 @@ cg-board square.hl { background: rgba(255, 190, 0, .5); }
 }
 .mat.cg-wrap piece { position: static; display: inline-block; width: 36px; height: 36px; margin-right: -15px; transform: none; z-index: auto; filter: grayscale(.3); will-change: auto; }
 .mat .grp piece:last-child { margin-right: 0; }
-#scene-del.confirm { color: var(--bad); border-color: var(--bad); font-size: 11px; }
 
 /* legend under the move tree */
 .legend { display: grid; gap: 3px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
@@ -715,3 +713,16 @@ a.btn { text-decoration: none; display: inline-flex; }
   .lesson-open { min-height: 48px; }
   .lesson-del { min-width: 48px; }
 }
+
+/* ---------- step 3: the boards' tabs above the board ---------- */
+.btabs-top { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.bt-scroll { flex: 0 1 auto; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.bt-scroll::-webkit-scrollbar { display: none; }
+.btabs-top #all-boards { margin-left: auto; }
+.btabs-top .btab { flex: none; max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
+.btabs-top .ibtn { flex: none; }
+#pmenu { max-height: 70vh; overflow-y: auto; }
+.menu .mi.on { color: var(--accent); font-weight: 600; }
+.menu-form { display: flex; gap: 6px; padding: 2px 6px 6px; }
+.menu-form input { flex: 1; min-width: 0; font: 13px var(--font-mono); padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); }
+.players { margin-top: 2px; }
