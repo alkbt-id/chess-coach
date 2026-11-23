@@ -268,7 +268,7 @@ document.addEventListener("touchend", (e) => {
 
 // chessground rebuilds the board when the orientation flips (and on redrawAll). A redraw queued just before that
 // still runs on the old, detached board and marks the shapes as drawn, so the new board kept stale arrows
-// (Stockfish's arrow from «Разбор» stayed over the game in «Игра»). One frame later all shapes are drawn again.
+// (Stockfish's arrow from «Анализ» stayed over the game in «Игра»). One frame later all shapes are drawn again.
 let shapesFrame = 0;
 function resyncShapes() {
   if (shapesFrame) return;
@@ -473,7 +473,7 @@ function renderBoard() {
     const p = preview.idx >= 0 ? preview.plies[preview.idx] : null;
     const fen = p ? p.fen : preview.start;
     setBoard({ fen, orientation: boardOrientation(), lastMove: p ? sq(p.uci) : undefined, shapes: engineArrow(fen) });
-    requestEval(); // in «Разбор» Stockfish counts the line's position as well
+    requestEval(); // in «Анализ» Stockfish counts the line's position as well
     renderCeval();
     renderEvalBar();
     return;
@@ -1193,7 +1193,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // STUDY — Lichess-style analysis with a move tree
 // =====================================================================
 // host: "play" / "puzzle" while a board of «Игра» / «Задачи» is on screen (a game's review, a puzzle's position, Claude's
-// boards of their chats): the board works as in «Разбор» (mode "study"), the mode on screen stays «Игра» / «Задачи»;
+// boards of their chats): the board works as in «Анализ» (mode "study"), the mode on screen stays «Игра» / «Задачи»;
 // hostLast: the board each of them had on screen, to come back to it
 const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null, host: null, hostLast: {}, pgn: null, pgnList: false };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
@@ -1221,7 +1221,7 @@ function pathTo(sc, id) {
 }
 
 function studyBoard() {
-  if (ed.on) return; // the board editor has the board («Разбор»)
+  if (ed.on) return; // the board editor has the board («Анализ»)
   if (repGameBoard() || repDrillBoard() || repTrialBoard()) return; // the repertoire drill, or a line being tried on a repertoire tree (REPERTOIRE)
   const node = curNode();
   const fen = node ? node.fen : START_FEN;
@@ -1337,7 +1337,7 @@ function setScene(id, node = "root") {
 }
 
 // ---- a chat and its boards: a board keeps its chat's id (sc.chat), a chat may have several boards, each with its own tree.
-// In «Разбор» the chat panel shows the chat of the board on screen; opening a chat brings its active board (the one of
+// In «Анализ» the chat panel shows the chat of the board on screen; opening a chat brings its active board (the one of
 // that chat last on screen or made last: study.chatBoard, kept by the server), and tabs above the tree switch boards. ----
 const chatOf = (sc) => (sc?.chat && ch.list.some((c) => c.id === sc.chat) ? sc.chat : null);
 const boardsOf = (cid) => (cid ? study.scenes.filter((s) => s.chat === cid) : []);
@@ -1349,7 +1349,7 @@ function activeBoard(cid) {
 // only there. Its key is what its chat is about (chat.about: "game:<id>", "play", "puzzle:<id>", "lpuzzle:<id>",
 // "rep"), else what it came from (originKey: a game's review, a puzzle's position). «Игра» keeps the games' and the
 // lobby's boards, «Задачи» the puzzles', «Репертуар» its trees, the lessons' boards and its contents' chat's boards,
-// «Разбор» the boards with no key: the user's own and those of chats about them. ----
+// «Анализ» the boards with no key: the user's own and those of chats about them. ----
 const lessonBoard = (sc) => !!lessonSection(sc?.chat);
 function boardKey(sc) {
   if (!sc || sc.rep) return null;
@@ -1558,7 +1558,7 @@ function seqHtml(first, cur, rest = false, lead = false) {
   }
   return row.end();
 }
-// a board's own tree in «Разбор» / «Репертуар»: its current move gets the ⋯ of its menu
+// a board's own tree in «Анализ» / «Репертуар»: its current move gets the ⋯ of its menu
 function boardTreeHtml(root, key, tags = null) {
   menuAt = study.node;
   repTags = tags;
@@ -1695,15 +1695,15 @@ function studyPanelHtml() {
     ${tree || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}`;
 }
 
-// the boards the tabs show in «Разбор»: this chat's, or the boards without a chat — never another chat
+// the boards the tabs show in «Анализ»: this chat's, or the boards without a chat — never another chat
 const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s) && studyOwn(s)));
 // the boards next to a board of «Игра» / «Задачи» / the repertoire's contents: the boards of the same thing
 const hostBoards = (sc) => (studyOwn(sc) ? scopeBoards(sc) : lessonBoard(sc) ? boardsOf(sc.chat) : keyBoards(boardKey(sc)));
 
-// ---- the tabs above the board: in «Разбор» the open chat's boards (or the boards without a chat); in «Репертуар»
+// ---- the tabs above the board: in «Анализ» the open chat's boards (or the boards without a chat); in «Репертуар»
 // the tree and the open lesson's boards (or the contents' chat's); in «Игра» and «Задачи» the game, the lobby or the
-// puzzle itself, then its boards (shown only when it has some). ＋ (in «Разбор» and a lesson) makes a board (start, FEN
-// or moves); the list reaches every board of «Разбор» — a board of another chat comes with its chat ----
+// puzzle itself, then its boards (shown only when it has some). ＋ (in «Анализ» and a lesson) makes a board (start, FEN
+// or moves); the list reaches every board of «Анализ» — a board of another chat comes with its chat ----
 function boardTabsHtml() {
   if (isLive() || rep.drill || rep.game || ed.on) return "";
   const sc = mode === "study" ? scene() : null;
@@ -1740,13 +1740,13 @@ function renderBoardTabs() {
   $(".btab.on", el)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-// every board of «Разбор», grouped by chat (like «Все чаты»); the boards of the other modes stay there
+// every board of «Анализ», grouped by chat (like «Все чаты»); the boards of the other modes stay there
 function allBoardsMenuHtml() {
   const groups = [...ch.list.filter((c) => chatHome(c.id) === "study").map((c) => [chatLabel(c), boardsOf(c.id).filter(studyOwn)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && studyOwn(s))]]
     .filter(([, l]) => l.length);
   return groups.map(([t, l]) => `<div class="menu-head">${esc(t)}</div>${l.map((x) => `<button type="button" class="mi${x.id === study.id ? " on" : ""}" data-act="board:${esc(x.id)}">${esc(x.title)}</button>`).join("")}`).join("");
 }
-// ＋ above the board; in «Разбор» also the editor and PGN files (a lesson's ＋ only makes a position)
+// ＋ above the board; in «Анализ» also the editor and PGN files (a lesson's ＋ only makes a position)
 const newBoardMenuHtml = () => `<div class="menu-head">Новая доска</div>
   <button type="button" class="mi" data-act="start">Начальная позиция</button>
   ${rep.on ? "" : `<button type="button" class="mi" data-act="edit">Расставить позицию</button>
@@ -1810,7 +1810,7 @@ function hostBack() {
   if (p && !lp.on && pz.cur?.id !== p.id) loadPuzzle(p);
 }
 
-// ⋯ of a board in «Разбор»: its FEN, its game on Lichess, deleting it (asked again in the menu)
+// ⋯ of a board in «Анализ»: its FEN, its game on Lichess, deleting it (asked again in the menu)
 function boardMenu(anchor, sc) {
   const g = sc.game || {};
   const items = () => `<button type="button" class="mi" data-act="fen">Скопировать FEN</button>
@@ -1878,7 +1878,7 @@ function renderStudy() {
   const cur = scene();
   if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
   if (cur && study.host) study.hostLast[study.host] = { id: cur.id, node: study.node }; // «Игра» / «Задачи» come back to it
-  else if (studyOwn(cur) && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after other modes
+  else if (studyOwn(cur) && !rep.on) study.last = { id: cur.id, node: study.node }; // «Анализ» comes back to it after other modes
   if (!preview) studyBoard();
   renderStudyPanel();
   renderBoardTabs();
@@ -2036,7 +2036,7 @@ $("#ctx").addEventListener("click", async (e) => {
 document.addEventListener("click", (e) => { if (!e.target.closest("#ctx, .mv-menu")) $("#ctx").hidden = true; });
 
 // =====================================================================
-// «Разбор»: PGN files and the board editor
+// «Анализ»: PGN files and the board editor
 // =====================================================================
 // A PGN file (or PGN pasted in ＋): one game goes straight onto a board, several are listed in the panel (study.pgn,
 // study.pgnList) and the one picked becomes a board (coach/pgnfile.py); the same game opened again brings its board
@@ -3073,7 +3073,7 @@ const HIDDEN_TOOLS = new Set(["ToolSearch", "TodoWrite"]);
 const curChat = () => ch.list.find((c) => c.id === ch.cur) || null;
 
 // ---- the chat on screen is the chat of what the user is doing; there are no chat tabs ----
-// «Разбор»: the board's chat (sc.chat); «Репертуар»: the open section's lesson, or the contents' own chat;
+// «Анализ»: the board's chat (sc.chat); «Репертуар»: the open section's lesson, or the contents' own chat;
 // «Задачи»: the puzzle's chat; «Игра»: the chat of the game on screen, or the lobby's own one. A thing that is not a
 // board finds its chat by a key (ch.for = the server's settings.chat_for, coach/chat.py): "puzzle:<id>",
 // "lpuzzle:<id>", "game:<id>", "rep", "play". Nothing has a chat until its first message (newChat makes it).
@@ -3099,7 +3099,7 @@ function activityLabel() {
   if (mode === "study") {
     if (rep.on) { const s = repSec(); return s ? `Урок · ${s.name}` : "Репертуар"; }
     const sc = scene();
-    return sc ? `Доска «${sc.title}»` : curChat() ? "Без доски" : "Разбор";
+    return sc ? `Доска «${sc.title}»` : curChat() ? "Без доски" : "Анализ";
   }
   if (mode === "puzzle") {
     if (lp.on) return lp.cur ? `Задача Lichess${lp.cur.rating ? ` · ${lp.cur.rating}` : ""}` : "Задачи Lichess";
@@ -3127,7 +3127,7 @@ function showChat(id) {
   if (id !== ch.cur) openChat(id, { follow: false });
   else { renderChatHead(); if (!id) renderChatLog(); }
 }
-// «Задачи», «Игра» and the repertoire's contents; «Разбор» and a section follow their boards and lessons
+// «Задачи», «Игра» and the repertoire's contents; «Анализ» and a section follow their boards and lessons
 function followActivity() {
   if (isLive()) return;
   if (mode === "study" && !(rep.on && !repSec())) { followBoard(); return; }
@@ -3227,7 +3227,7 @@ async function goToChat(id) {
   if (kind === "game" && pgame()?.id === ref) { play.show = ref; play.ply = null; if (mode !== "play") setMode("play"); else renderPlay(); return; }
   if (kind === "play") { play.show = null; if (mode !== "play") setMode("play"); else renderPlay(); return; }
   if (kind === "rep") { rep.section = null; repRemember(); if (!rep.on || mode !== "study") setMode("rep"); else repToc(); return; }
-  // a chat with nothing on screen to bring (no boards left, a Lichess puzzle or a game that is gone): «Разбор» without a board
+  // a chat with nothing on screen to bring (no boards left, a Lichess puzzle or a game that is gone): «Анализ» without a board
   await openChat(id, { follow: false });
   study.id = null;
   study.node = "root";
@@ -3263,7 +3263,7 @@ function renderModelPop() {
   if (pop.hidden) return;
   const lesson = !!rep.data.lessons[c.id];
   pop.innerHTML = ch.confirm === "del"
-    ? `<div class="menu-confirm"><b>Удалить этот чат?</b><span>Разговор пропадёт; его доски останутся в «Разборе».</span>
+    ? `<div class="menu-confirm"><b>Удалить этот чат?</b><span>Разговор пропадёт; его доски останутся в «Анализе».</span>
         <div class="actions"><button type="button" class="btn danger" data-chat-del="yes">Удалить</button><button type="button" class="btn quiet" data-chat-del="no">Отмена</button></div></div>`
     : ch.confirm === "clear"
     ? `<div class="menu-confirm"><b>Очистить этот чат?</b><span>Сообщения пропадут, Claude начнёт разговор заново${c.busy ? " (его ответ прервётся)" : ""}. Доски останутся.${lesson ? " Конспект урока Claude сначала допишет." : ""}</span>
@@ -3363,7 +3363,7 @@ function updateSendButton() {
 
 function renderChat() { renderChatHead(); renderChatOpts(); renderChatLog(); renderBoardTabs(); }
 
-// follow: in «Разбор» the board follows the chat (its board, or an empty one for a chat without a board)
+// follow: in «Анализ» the board follows the chat (its board, or an empty one for a chat without a board)
 async function openChat(id, { follow = true } = {}) {
   ch.cur = id;
   ch.confirm = null;
@@ -4281,7 +4281,7 @@ function applyLock() {
 }
 
 // =====================================================================
-// REPERTOIRE — the user's openings (coach/repertoire.py). «Репертуар» is «Разбор» with the repertoire on
+// REPERTOIRE — the user's openings (coach/repertoire.py). «Репертуар» is «Анализ» with the repertoire on
 // (rep.on; `mode` stays "study"), so the board, the tree view, the engine and the move clicks are the same.
 // =====================================================================
 // Two trees, «За белых» and «За чёрных», are boards with sc.rep = their colour, kept by the server apart from
@@ -4496,7 +4496,7 @@ function repSectionHtml(s) {
   return head + repDrillButton({ section: s.id }, "drill-sec") + acts + tabs + body;
 }
 
-// «Уроки» of a section: its chats with Claude, newest first; × deletes one (asks again), its boards stay in «Разбор»
+// «Уроки» of a section: its chats with Claude, newest first; × deletes one (asks again), its boards stay in «Анализ»
 function repLessonsHtml(s, lessons) {
   const rows = lessons.map((c, i) => `<div class="lesson-row${c.id === ch.cur ? " on" : ""}">
       <button type="button" class="lesson-open" data-lesson="${esc(c.id)}" title="${esc(c.title)}">${c.busy ? '<span class="dot"></span>' : ""}<span class="ln-title">${esc(c.title === "Новый чат" ? `Урок ${lessons.length - i}` : c.title)}</span><span class="ln-date">${c.updated ? repAgo(c.updated) : ""}</span></button>
@@ -5434,9 +5434,9 @@ function updateCounts() {
   $("#due-count").textContent = due || "";
 }
 
-// The chat follows what is on screen: in «Разбор» the board's chat, in «Задачи» and «Игра» the chat of the puzzle
+// The chat follows what is on screen: in «Анализ» the board's chat, in «Задачи» and «Игра» the chat of the puzzle
 // or the game (followActivity), in «Репертуар» the section's lesson (repEnter).
-// follow, for «Разбор»: "screen" (default) — the board that was on screen there (back from another mode: the one
+// follow, for «Анализ»: "screen" (default) — the board that was on screen there (back from another mode: the one
 // left there, never a board of another mode); "board" — the caller has just put a board on screen;
 // "none" — the board and the chat stay as the caller set them (goToChat)
 // board, for «Игра» / «Задачи»: { id, node } — show that board of theirs; without it they come back to the board
@@ -5446,12 +5446,12 @@ function setMode(m, { save = true, follow = "screen", board = null } = {}) {
   editorClose();
   closePromotion();
   closePreviewSilently();
-  const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
+  const view = m; // «Репертуар» is «Анализ» with the repertoire on: the same board, tree and engine
   const wasRep = rep.on, wasHost = study.host;
   rep.on = m === "rep";
   const hb = (m === "play" || m === "puzzle") && !isLive() ? hostBoard(m, board) : null;
   study.host = hb ? m : null;
-  if (hb) { // a board of «Игра» / «Задачи»: it works as in «Разбор», the mode on screen stays theirs
+  if (hb) { // a board of «Игра» / «Задачи»: it works as in «Анализ», the mode on screen stays theirs
     if (hb.id !== study.id) study.flipped = false;
     study.id = hb.id;
     study.node = hb.node;

@@ -89,7 +89,7 @@ A position that follows from a board goes into its tree as a variation. A positi
 another opening, a new example) goes on a new board: `show` adds one to this chat and makes it active; the older
 boards stay as they are. Never clear or reuse a board for an unrelated position.
 
-The boards live where this chat lives and come on screen there: a chat about a board of «Разбор» — in «Разбор»,
+The boards live where this chat lives and come on screen there: a chat about a board of «Анализ» — in «Анализ»,
 a chat about a game or the user's games (the «Игра» lobby) — in «Игра», a puzzle's chat — in «Задачи», a lesson —
 in «Репертуар». The app never moves the user to another mode to show your board.
 

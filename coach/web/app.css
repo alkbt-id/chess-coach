@@ -494,7 +494,7 @@ a.btn { text-decoration: none; display: inline-flex; }
   background: radial-gradient(circle, #e8e8e8 22%, #8a8a8a 100%); transition: border-radius .12s, background .12s; }
 .promo-sq:hover, .promo-sq:focus-visible { border-radius: 0; background: radial-gradient(circle, #fff 22%, #e69f00 100%); outline: none; }
 .promo.cg-wrap piece { position: static; display: block; width: 100%; height: 100%; transform: none; pointer-events: none; will-change: auto; }
-/* the user's games (in «Игра») and the review block of a game diagram (in «Разбор») */
+/* the user's games (in «Игра») and the review block of a game diagram (in «Анализ») */
 .ghist { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
 .ghist h3 { margin: 0; font: 650 15px var(--font-display); }
 .hist-head { display: flex; justify-content: space-between; align-items: baseline; }
@@ -786,12 +786,12 @@ body.live #settings { display: none !important; }
   .tview .line > .tg { width: 30px; height: 30px; font-size: 14px; margin-left: -6px; }
 }
 
-/* «Разбор»: a PGN file's games (coach/pgnfile.py) */
+/* «Анализ»: a PGN file's games (coach/pgnfile.py) */
 .pgn-list .hrow { grid-template-columns: 34px 1fr; }
 .pgn-list .hres { font-size: 11px; color: var(--muted); }
 .pgn-q { width: 100%; font: 13px var(--font-body); padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); }
 
-/* «Разбор»: the board editor — two rows of pieces to drag or pick, then the side to move and castling */
+/* «Анализ»: the board editor — two rows of pieces to drag or pick, then the side to move and castling */
 .ed-box { display: grid; gap: 4px; }
 .ed-pal { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
 .ed-pc { aspect-ratio: 1; min-height: 44px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f0d9b5; cursor: grab; touch-action: none; } /* a light square: black pieces stay visible in the dark theme */

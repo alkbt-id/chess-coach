@@ -130,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         decisionHandler(.allow)
     }
 
-    // <input type="file"> («Открыть PGN…» in «Разбор»): WKWebView on the Mac shows no file dialog by itself.
+    // <input type="file"> («Открыть PGN…» in «Анализ»): WKWebView on the Mac shows no file dialog by itself.
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()

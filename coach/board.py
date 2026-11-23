@@ -225,7 +225,7 @@ def op_pgn_games(b: dict) -> dict:
 
 
 async def op_pgn_open(b: dict) -> dict:
-    """One game of a PGN text as a board of «Разбор» (with `chat`: one more board of that chat). The same game opened
+    """One game of a PGN text as a board of «Анализ» (with `chat`: one more board of that chat). The same game opened
     again brings its board back instead of a copy."""
     game = pgnfile.read(b.get("pgn") or "", int(b.get("index") or 0))
     key = pgnfile.key_of(game)

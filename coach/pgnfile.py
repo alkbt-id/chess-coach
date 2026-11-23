@@ -1,4 +1,4 @@
-"""PGN files in «Разбор»: the list of a file's games and one game as a board.
+"""PGN files in «Анализ»: the list of a file's games and one game as a board.
 
 The window reads the file (or takes pasted text) and sends its text; nothing is kept here. A file with one game
 opens straight on a board, with several the window shows the list (`games`) and opens the one picked (`scene`).
