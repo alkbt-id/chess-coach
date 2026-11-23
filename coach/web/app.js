@@ -5,7 +5,7 @@
 // Any move written in text (chat, comments, explanations) is clickable and previews the line on the board.
 // The server pushes changes over SSE (/api/events); the UI reports what it shows to /api/view.
 import { Chessground } from "./vendor/chessground/chessground.min.js";
-import { Chess } from "./vendor/chess.js";
+import { Chess, validateFen } from "./vendor/chess.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -482,6 +482,7 @@ function renderBoard() {
 }
 
 function boardOrientation() {
+  if (mode === "study" && ed.on) return ed.orient;
   if (mode === "study") { const o = scene()?.orientation || "white"; return study.flipped ? other(o) : o; }
   if (mode === "play") { const o = pgame()?.color || "white"; return play.flipped ? other(o) : o; }
   const p = lp.on ? lp.cur : pz.cur; // Lichess puzzles keep their own current puzzle
@@ -1194,7 +1195,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // host: "play" / "puzzle" while a board of «Игра» / «Задачи» is on screen (a game's review, a puzzle's position, Claude's
 // boards of their chats): the board works as in «Разбор» (mode "study"), the mode on screen stays «Игра» / «Задачи»;
 // hostLast: the board each of them had on screen, to come back to it
-const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null, host: null, hostLast: {} };
+const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null, host: null, hostLast: {}, pgn: null, pgnList: false };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
 const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null, game: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
@@ -1220,6 +1221,7 @@ function pathTo(sc, id) {
 }
 
 function studyBoard() {
+  if (ed.on) return; // the board editor has the board («Разбор»)
   if (repGameBoard() || repDrillBoard() || repTrialBoard()) return; // the repertoire drill, or a line being tried on a repertoire tree (REPERTOIRE)
   const node = curNode();
   const fen = node ? node.fen : START_FEN;
@@ -1324,6 +1326,8 @@ function studyStep(dir) {
 }
 
 function setScene(id, node = "root") {
+  editorClose();
+  study.pgnList = false;
   study.id = id;
   study.node = node;
   study.flipped = false;
@@ -1600,7 +1604,7 @@ function engineArrow(fen) {
 
 function requestEval() {
   clearTimeout(ceval.timer);
-  if (!study.engine || mode !== "study" || isLive() || rep.drill || rep.game) return; // the drill or a game: no engine hints
+  if (!study.engine || mode !== "study" || isLive() || rep.drill || rep.game || ed.on) return; // the drill or a game: no engine hints
   const fen = shownFen;
   if (ceval.fen === fen && ceval.deep) return;
   if (ceval.fen !== fen) { ceval.fen = fen; ceval.res = null; ceval.deep = false; }
@@ -1650,7 +1654,7 @@ function renderCeval() {
 
 function renderEvalBar() {
   const bar = $("#evalbar");
-  const on = study.engine && mode === "study" && !isLive() && !rep.drill && !rep.game;
+  const on = study.engine && mode === "study" && !isLive() && !rep.drill && !rep.game && !ed.on;
   if (bar.hidden === on) { bar.hidden = !on; layout(); }
   if (!on) return;
   const l = ceval.fen === shownFen ? ceval.res?.lines?.[0] : null;
@@ -1663,12 +1667,16 @@ function renderEvalBar() {
 
 // ---- study panel ----
 function studyPanelHtml() {
+  if (ed.on) return editorHtml();
+  if (study.pgnList && study.pgn && !rep.on && !study.host) return pgnListHtml();
   const sc = scene();
   if (rep.on && !(sc && !sc.rep && !repSec() && !rep.game && !rep.drill)) return repPanelHtml(); // (a board of the contents' chat: as any board)
   if (!sc) { // a chat without a board, or no boards yet: the tabs row above the board keeps every board reachable
     return `<div class="p-head"><div class="p-title"><h1 class="title">Анализ</h1></div></div>
-      <p class="hint">Двигай фигуры на доске или задай позицию:</p>
-      <form class="newpos" id="newpos-form"><input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn primary" type="submit">Создать</button></form>
+      <p class="hint">Двигай фигуры на доске, расставь позицию, открой PGN-файл или вставь FEN, ходы или PGN:</p>
+      <div class="actions"><button type="button" class="btn" id="ed-open">Расставить позицию</button><button type="button" class="btn" id="pgn-open">Открыть PGN…</button>
+        ${study.pgn ? `<button type="button" class="btn quiet" id="pgn-again">Партии из «${esc(study.pgn.name)}»</button>` : ""}</div>
+      <form class="newpos" id="newpos-form"><input id="newpos-input" placeholder="FEN, 1.e4 e5 2.Nf3 или PGN" autocomplete="off"><button class="btn primary" type="submit">Создать</button></form>
       ${cevalHtml()}`;
   }
   askAt = curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) && !isLive() ? study.node : null;
@@ -1697,7 +1705,7 @@ const hostBoards = (sc) => (studyOwn(sc) ? scopeBoards(sc) : lessonBoard(sc) ? b
 // puzzle itself, then its boards (shown only when it has some). ＋ (in «Разбор» and a lesson) makes a board (start, FEN
 // or moves); the list reaches every board of «Разбор» — a board of another chat comes with its chat ----
 function boardTabsHtml() {
-  if (isLive() || rep.drill || rep.game) return "";
+  if (isLive() || rep.drill || rep.game || ed.on) return "";
   const sc = mode === "study" ? scene() : null;
   const tab = (x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`;
   const plus = (title) => `<button type="button" class="ibtn" id="board-add" aria-label="Новая доска" title="${title}">${ICON.plus}</button>`;
@@ -1738,12 +1746,17 @@ function allBoardsMenuHtml() {
     .filter(([, l]) => l.length);
   return groups.map(([t, l]) => `<div class="menu-head">${esc(t)}</div>${l.map((x) => `<button type="button" class="mi${x.id === study.id ? " on" : ""}" data-act="board:${esc(x.id)}">${esc(x.title)}</button>`).join("")}`).join("");
 }
+// ＋ above the board; in «Разбор» also the editor and PGN files (a lesson's ＋ only makes a position)
 const newBoardMenuHtml = () => `<div class="menu-head">Новая доска</div>
   <button type="button" class="mi" data-act="start">Начальная позиция</button>
-  <div class="menu-head">Из FEN или ходов</div>
-  <form class="menu-form"><input name="pos" placeholder="1.e4 e5 2.Nf3" autocomplete="off" aria-label="FEN или ходы"><button class="btn primary" type="submit">Создать</button></form>`;
+  ${rep.on ? "" : `<button type="button" class="mi" data-act="edit">Расставить позицию</button>
+  <button type="button" class="mi" data-act="pgn">Открыть PGN…</button>
+  ${study.pgn ? `<button type="button" class="mi" data-act="pgn-list">Партии из «${esc(study.pgn.name)}» · ${study.pgn.games.length}</button>` : ""}`}
+  <div class="menu-head">${rep.on ? "Из FEN или ходов" : "Из FEN, ходов или PGN"}</div>
+  <form class="menu-form"><input name="pos" placeholder="1.e4 e5 2.Nf3" autocomplete="off" aria-label="FEN, ходы или PGN"><button class="btn primary" type="submit">Создать</button></form>`;
 
 async function createBoard(position) {
+  if (position && !rep.on && looksPgn(position)) { await importPgnText(unflatPgn(position), "Вставленный PGN"); return; }
   try {
     const r = await post("/api/scene", { title: "Новая позиция", position: position || "start", chat: claimChat() });
     await waitScene(r.scene);
@@ -1759,7 +1772,10 @@ $("#btabs").addEventListener("click", (e) => {
   else if (t.dataset.repTree !== undefined) repShowTree();
   else if (t.id === "board-add") {
     openMenu(t, newBoardMenuHtml(), async (act, el) => {
-      if (act === "start") await createBoard("start");
+      if (act === "pgn") pickPgnFile(); // (first: the file dialog needs the click itself)
+      else if (act === "edit") editorOpen();
+      else if (act === "pgn-list") { study.pgnList = true; renderStudy(); }
+      else if (act === "start") await createBoard("start");
       else if (act === "submit") await createBoard(new FormData(el).get("pos").trim());
     });
     $("#pmenu input")?.focus();
@@ -1905,16 +1921,28 @@ $("#panel").addEventListener("click", async (e) => {
   } else if (t.id === "board-menu") {
     const sc = scene();
     if (sc) boardMenu(t, sc);
-  }
+  } else if (t.dataset.pgn !== undefined) openPgnGame(study.pgn, Number(t.dataset.pgn));
+  else if (t.id === "pgn-close") { study.pgnList = false; renderStudy(); }
+  else if (t.id === "pgn-open") pickPgnFile();
+  else if (t.id === "pgn-again") { study.pgnList = true; renderStudy(); }
+  else if (t.id === "ed-open") editorOpen();
+  else if (ed.on) editorClick(t);
 });
 $("#panel").addEventListener("change", (e) => {
+  if (e.target.dataset.edCastle) { edCastleSet(e.target.dataset.edCastle, e.target.checked); return; }
   if (e.target.id === "lp-angle" || e.target.id === "lp-diff") {
     if (e.target.id === "lp-angle") lp.angle = e.target.value; else lp.difficulty = e.target.value;
     lpSave();
     if (!lp.st || lp.st.done || lp.st.error || (!lp.st.step && !lp.st.wrong)) lpNext();
   }
 });
+$("#panel").addEventListener("input", (e) => {
+  if (e.target.id !== "pgn-q" || !study.pgn) return;
+  study.pgn.q = e.target.value;
+  $(".pgn-list", $("#panel")).innerHTML = pgnRowsHtml(study.pgn);
+});
 $("#panel").addEventListener("submit", async (e) => {
+  if (e.target.id === "ed-fen-form") { e.preventDefault(); edTakeFen($("#ed-fen").value); return; }
   if (e.target.id !== "newpos-form") return;
   e.preventDefault();
   await createBoard($("#newpos-input").value.trim());
@@ -2006,6 +2034,260 @@ $("#ctx").addEventListener("click", async (e) => {
   }
 });
 document.addEventListener("click", (e) => { if (!e.target.closest("#ctx, .mv-menu")) $("#ctx").hidden = true; });
+
+// =====================================================================
+// «Разбор»: PGN files and the board editor
+// =====================================================================
+// A PGN file (or PGN pasted in ＋): one game goes straight onto a board, several are listed in the panel (study.pgn,
+// study.pgnList) and the one picked becomes a board (coach/pgnfile.py); the same game opened again brings its board
+// back. The file is read here; the server keeps nothing of it. A file dropped on the window opens the same way.
+const pgnInput = Object.assign(document.createElement("input"), { type: "file", hidden: true });
+document.body.append(pgnInput);
+pgnInput.addEventListener("change", () => { const f = pgnInput.files?.[0]; pgnInput.value = ""; if (f) importPgnFile(f); });
+const pickPgnFile = () => { if (!isLive()) pgnInput.click(); };
+document.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault(); });
+document.addEventListener("drop", (e) => {
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  e.preventDefault(); // (else the window would open the file itself)
+  if (!isLive()) importPgnFile(f);
+});
+
+async function importPgnFile(f) {
+  if (f.size > 20e6) { setStatus("Файл больше 20 МБ — слишком большой", true); return; }
+  let text;
+  try { text = await f.text(); } catch { setStatus("Не удалось прочитать файл", true); return; }
+  await importPgnText(text, f.name);
+}
+
+// PGN pasted into a one-line field loses its line breaks: the tags go back on lines of their own
+const unflatPgn = (t) => t.replace(/\]\s*\[/g, "]\n[").replace(/\]\s*(?=[^\s[])/, "]\n\n");
+const looksPgn = (t) => /^\s*\[|[{(]|\s(1-0|0-1|1\/2-1\/2|\*)\s*$/.test(t);
+
+async function importPgnText(text, name) {
+  if (isLive()) return;
+  if (mode !== "study" || rep.on || study.host) setMode("study");
+  editorClose();
+  let r;
+  try { r = await post("/api/pgn", { pgn: text }); } catch (err) { setStatus(String(err.message), true); return; }
+  if (!r.games.length) { setStatus("В файле не нашлось партий в PGN", true); return; }
+  const file = { name, text, games: r.games, q: "" };
+  if (r.games.length === 1) { await openPgnGame(file, 0); return; }
+  study.pgn = file;
+  study.pgnList = true;
+  renderStudy();
+  $("#panel").scrollTop = 0;
+}
+
+async function openPgnGame(file, i) {
+  study.pgnList = false;
+  try {
+    const r = await post("/api/pgn", { pgn: file.text, index: i, chat: claimChat() });
+    await waitScene(r.scene);
+    setScene(r.scene);
+  } catch (err) { setStatus(String(err.message), true); renderStudy(); }
+}
+
+const pgnWho = (g) => (g.white || g.black
+  ? `${esc(g.white || "?")}${g.white_elo ? ` <small>${esc(g.white_elo)}</small>` : ""} – ${esc(g.black || "?")}${g.black_elo ? ` <small>${esc(g.black_elo)}</small>` : ""}`
+  : esc(g.chapter || g.event || `Партия ${g.i + 1}`));
+const pgnMeta = (g) => [g.white || g.black ? g.chapter || g.event : "", g.date, g.opening].filter(Boolean).map(esc).join(" · ");
+function pgnRowsHtml(f) {
+  const q = f.q.trim().toLowerCase();
+  const rows = q ? f.games.filter((g) => [g.white, g.black, g.event, g.chapter, g.opening, g.date].join(" ").toLowerCase().includes(q)) : f.games;
+  return rows.slice(0, 300).map((g) => `<button type="button" class="hrow" data-pgn="${g.i}"><span class="hres">${esc(g.result)}</span>
+      <span class="hmain"><span class="hopp">${pgnWho(g)}</span><small class="hmeta">${pgnMeta(g)}</small></span></button>`).join("")
+    + (rows.length > 300 ? `<p class="hint">Показаны 300 из ${rows.length} — уточни поиск.</p>` : rows.length ? "" : `<p class="hint">Ничего не нашлось.</p>`);
+}
+function pgnListHtml() {
+  const f = study.pgn;
+  return `<div class="p-head"><div class="p-title"><h1 class="title">${esc(f.name)}</h1>
+      <div class="rep-meta">${f.games.length} ${plural(f.games.length, "партия", "партии", "партий")} в файле — выбери, какую открыть</div></div>
+      <button type="button" class="btn small quiet" id="pgn-close">Закрыть</button></div>
+    ${f.games.length > 12 ? `<input class="pgn-q" id="pgn-q" type="search" placeholder="Игрок, турнир, дебют" autocomplete="off" value="${esc(f.q)}" aria-label="Поиск по партиям">` : ""}
+    <div class="hlist pgn-list">${pgnRowsHtml(f)}</div>`;
+}
+
+// ---- the board editor: set up any position, then «Готово» makes it a new board (the board on screen stays as it
+// was). Pieces are dragged from the rows in the panel (or picked there, then placed by tapping squares — the iPad
+// way); a piece dragged off the board is taken away. The side to move and castling make the FEN with the pieces;
+// a position that cannot be played (no king, the side not to move in check, a pawn on the edge) is not taken. ----
+const ed = { on: false, tool: "move", turn: "w", castle: "KQkq", orient: "white" };
+const ED_ROLES = ["king", "queen", "rook", "bishop", "knight", "pawn"];
+const ED_NAME = { king: "король", queen: "ферзь", rook: "ладья", bishop: "слон", knight: "конь", pawn: "пешка" };
+const EMPTY_PLACEMENT = "8/8/8/8/8/8/8/8";
+
+function placementMap(p) {
+  const m = {};
+  p.split("/").forEach((row, i) => {
+    let f = 0;
+    for (const c of row) { if (/\d/.test(c)) f += Number(c); else { m["abcdefgh"[f] + (8 - i)] = c; f++; } }
+  });
+  return m;
+}
+const CASTLE_NEEDS = { K: ["e1", "K", "h1", "R"], Q: ["e1", "K", "a1", "R"], k: ["e8", "k", "h8", "r"], q: ["e8", "k", "a8", "r"] };
+const castleFits = (c, m) => { const [ks, k, rs, r] = CASTLE_NEEDS[c]; return m[ks] === k && m[rs] === r; };
+function edFen() {
+  const placement = cg.getFen().replace(/~/g, "");
+  const m = placementMap(placement);
+  const castle = [..."KQkq"].filter((c) => ed.castle.includes(c) && castleFits(c, m)).join("") || "-";
+  return `${placement} ${ed.turn} ${castle} - 0 1`;
+}
+function edProblem(fen) {
+  const m = placementMap(fen.split(" ")[0]);
+  const n = (p) => Object.values(m).filter((x) => x === p).length;
+  if (n("K") !== 1) return n("K") ? "У белых больше одного короля" : "Нет белого короля";
+  if (n("k") !== 1) return n("k") ? "У чёрных больше одного короля" : "Нет чёрного короля";
+  if (Object.entries(m).some(([sq, p]) => /p/i.test(p) && /[18]$/.test(sq))) return "Пешка не может стоять на первой или последней горизонтали";
+  try {
+    if (new Chess(fen.replace(/ [wb] /, (x) => (x === " w " ? " b " : " w "))).inCheck()) {
+      return ed.turn === "w" ? "Чёрному королю шах, а ходят белые" : "Белому королю шах, а ходят чёрные";
+    }
+  } catch {}
+  const v = validateFen(fen);
+  return v.ok ? "" : v.error;
+}
+
+function editorOpen() {
+  if (isLive()) return;
+  if (mode !== "study" || rep.on || study.host) setMode("study");
+  closePreviewSilently();
+  const [placement, turn = "w", castle = "-"] = (scene() ? shownFen : START_FEN).split(" ");
+  Object.assign(ed, { tool: "move", turn, castle, orient: boardOrientation() });
+  ed.on = true;
+  study.pgnList = false;
+  cg.set({
+    fen: placement, orientation: ed.orient, lastMove: undefined, check: false, turnColor: turn === "w" ? "white" : "black",
+    movable: { free: true, color: "both", dests: new Map(), events: { after: undefined } },
+    draggable: { deleteOnDropOff: true },
+    events: { change: edChanged },
+  });
+  setAutoShapes([]);
+  cg.setShapes([]);
+  userShapes = [];
+  renderStudy();
+  edChanged();
+}
+
+function editorClose() {
+  if (!ed.on) return;
+  ed.on = false;
+  cg.set({ movable: { free: false }, draggable: { deleteOnDropOff: false }, events: { change: undefined } });
+}
+
+function edChanged() {
+  if (!ed.on) return;
+  shownFen = edFen();
+  renderStudyPanel();
+  renderMaterial();
+  reportView();
+}
+
+function edPut(placement, turn = ed.turn, castle = ed.castle) {
+  Object.assign(ed, { turn, castle });
+  cg.set({ fen: placement, turnColor: turn === "w" ? "white" : "black", lastMove: undefined });
+  edChanged();
+}
+
+function edCastleSet(c, on) {
+  ed.castle = [..."KQkq"].filter((x) => (x === c ? on : ed.castle.includes(x))).join("") || "-";
+  edChanged();
+}
+
+function edTakeFen(text) {
+  const [placement, turn, castle] = text.trim().split(/\s+/);
+  if (!/^([pnbrqkPNBRQK1-8]{1,8}\/){7}[pnbrqkPNBRQK1-8]{1,8}$/.test(placement || "")) { setStatus("Это не FEN", true); return; }
+  setStatus("");
+  edPut(placement, turn === "b" ? "b" : "w", castle && /^[KQkq-]+$/.test(castle) ? castle : "-");
+}
+
+function editorClick(t) {
+  if (t.dataset.edTool) { ed.tool = t.dataset.edTool; renderStudyPanel(); }
+  else if (t.dataset.edTurn) { ed.turn = t.dataset.edTurn; cg.set({ turnColor: ed.turn === "w" ? "white" : "black" }); edChanged(); }
+  else if (t.dataset.edSet === "start") edPut(START_FEN.split(" ")[0], "w", "KQkq");
+  else if (t.dataset.edSet === "empty") edPut(EMPTY_PLACEMENT, ed.turn, "-");
+  else if (t.id === "ed-done") editorDone();
+  else if (t.id === "ed-cancel") { editorClose(); renderStudy(); }
+}
+
+async function editorDone() {
+  const fen = edFen();
+  if (edProblem(fen)) return;
+  const orientation = ed.orient;
+  editorClose();
+  try {
+    const r = await post("/api/scene", { title: "Своя позиция", position: fen, orientation, chat: claimChat() });
+    await waitScene(r.scene);
+    setScene(r.scene);
+  } catch (err) { setStatus(String(err.message), true); renderStudy(); }
+}
+
+function editorHtml() {
+  const fen = edFen();
+  const bad = edProblem(fen);
+  const m = placementMap(fen.split(" ")[0]);
+  const row = (color) => `<div class="ed-pal" role="group" aria-label="${color === "white" ? "Белые фигуры" : "Чёрные фигуры"}">${ED_ROLES.map((r) => {
+    const k = `${color} ${r}`;
+    return `<button type="button" class="ed-pc${ed.tool === k ? " on" : ""}" data-ed-piece="${k}" aria-pressed="${ed.tool === k}" title="${ED_NAME[r]}, ${color === "white" ? "белые" : "чёрные"}"><piece class="${color} ${r}"></piece></button>`;
+  }).join("")}</div>`;
+  const tool = (k, label) => `<button type="button" class="${ed.tool === k ? "on" : ""}" data-ed-tool="${k}" aria-pressed="${ed.tool === k}">${label}</button>`;
+  const turn = (k, label) => `<button type="button" class="${ed.turn === k ? "on" : ""}" data-ed-turn="${k}" aria-pressed="${ed.turn === k}">${label}</button>`;
+  const cb = (c, label) => {
+    const fits = castleFits(c, m);
+    return `<label class="ed-cb${fits ? "" : " off"}"><input type="checkbox" data-ed-castle="${c}"${fits && ed.castle.includes(c) ? " checked" : ""}${fits ? "" : " disabled"}>${label}</label>`;
+  };
+  const top = ed.orient === "white" ? "black" : "white";
+  return `<div class="p-head"><div class="p-title"><h1 class="title">Расстановка ${helpBtn("editor")}</h1></div></div>
+    ${helpText("editor", "Перетащи фигуру из ряда на доску — или нажми на неё в ряду, а потом на клетки. Фигуры на доске двигаются перетаскиванием; утащи фигуру за край доски, чтобы снять. «Стереть» снимает фигуры нажатием. «Готово» сделает из позиции новую доску, а доска, что была на экране, останется как была.")}
+    <div class="ed-box cg-wrap">${row(top)}${row(other(top))}</div>
+    <div class="seg wide">${tool("move", "Двигать")}${tool("trash", "Стереть")}</div>
+    <div class="field-label">Ход</div>
+    <div class="seg wide">${turn("w", "Белых")}${turn("b", "Чёрных")}</div>
+    <div class="field-label">Рокировка</div>
+    <div class="ed-castle">${cb("K", "белые O-O")}${cb("Q", "белые O-O-O")}${cb("k", "чёрные O-O")}${cb("q", "чёрные O-O-O")}</div>
+    <div class="actions"><button type="button" class="btn small" data-ed-set="start">Начальная</button><button type="button" class="btn small" data-ed-set="empty">Пустая доска</button></div>
+    <form class="newpos" id="ed-fen-form"><input id="ed-fen" value="${esc(fen)}" autocomplete="off" spellcheck="false" aria-label="FEN"><button class="btn small" type="submit">Взять FEN</button></form>
+    ${bad ? `<p class="lerr">${esc(bad)}</p>` : ""}
+    <div class="actions"><button type="button" class="btn primary" id="ed-done"${bad ? " disabled" : ""}>Готово</button><button type="button" class="btn quiet" id="ed-cancel">Отмена</button></div>`;
+}
+
+// a piece of the rows: a press starts dragging it onto the board and picks it for tapping squares
+for (const type of ["mousedown", "touchstart"]) {
+  $("#panel").addEventListener(type, (e) => {
+    const b = e.target.closest("[data-ed-piece]");
+    if (!b || !ed.on || (type === "mousedown" && e.button !== 0)) return;
+    e.preventDefault(); // (touch: no scrolling and no click after it — the pick happens here)
+    ed.tool = b.dataset.edPiece;
+    for (const x of $$("[data-ed-piece], [data-ed-tool]", $("#panel"))) {
+      const on = x === b;
+      x.classList.toggle("on", on);
+      x.setAttribute("aria-pressed", String(on));
+    }
+    const [color, role] = ed.tool.split(" ");
+    cg.state.dom.bounds.clear();
+    cg.dragNewPiece({ color, role }, e, true);
+  }, { passive: false });
+}
+// with a piece or «Стереть» picked, a tap on a square puts that piece there (the same piece again takes it away)
+for (const type of ["mousedown", "touchstart"]) {
+  $("#board").addEventListener(type, (e) => {
+    if (!ed.on || mode !== "study" || ed.tool === "move" || drawMode || (type === "mousedown" && e.button !== 0)) return;
+    const p = e.touches?.[0] || e;
+    cg.state.dom.bounds.clear();
+    const key = cg.getKeyAtDomPos([p.clientX, p.clientY]);
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let put;
+    if (ed.tool !== "trash") {
+      const [color, role] = ed.tool.split(" ");
+      const was = cg.state.pieces.get(key);
+      put = was && was.color === color && was.role === role ? undefined : { color, role };
+    }
+    cg.setPieces(new Map([[key, put]]));
+    edChanged();
+  }, { capture: true, passive: false });
+}
 
 // =====================================================================
 // PUZZLES — positions from the user's games
@@ -5161,6 +5443,7 @@ function updateCounts() {
 // left on screen there (study.hostLast), or to the game, the lobby or the puzzle itself
 function setMode(m, { save = true, follow = "screen", board = null } = {}) {
   if (isLive() && m !== "play") return; // during a live game only the game is on screen
+  editorClose();
   closePromotion();
   closePreviewSilently();
   const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
@@ -5205,6 +5488,7 @@ function hostBoard(m, want) {
 
 // a board on screen in the mode it lives in (the callers make sure that mode is the one on screen)
 function putBoard(sc, node = "root") {
+  if (ed.on && boardHome(sc) === "study") { renderBoardTabs(); return; } // the user is setting up a position: it stays
   closePreviewSilently();
   const home = boardHome(sc);
   if (home === "play" || home === "puzzle") { setMode(home, { save: false, board: { id: sc.id, node } }); return; }
@@ -5239,7 +5523,8 @@ function setEngine(on) { // the switch sits in the engine block's head (cevalHtm
 }
 
 function flip() {
-  if (mode === "study") study.flipped = !study.flipped; else if (mode === "play") play.flipped = !play.flipped; else pz.flipped = !pz.flipped;
+  if (mode === "study" && ed.on) { ed.orient = other(ed.orient); renderStudyPanel(); } // (the editor's piece rows follow the board)
+  else if (mode === "study") study.flipped = !study.flipped; else if (mode === "play") play.flipped = !play.flipped; else pz.flipped = !pz.flipped;
   cg.set({ orientation: boardOrientation() });
   resyncShapes();
   if (mode === "play") renderPlayPanel(); // the clocks follow the board

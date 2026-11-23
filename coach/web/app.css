@@ -785,3 +785,18 @@ body.live #settings { display: none !important; }
 @media (any-pointer: coarse) {
   .tview .line > .tg { width: 30px; height: 30px; font-size: 14px; margin-left: -6px; }
 }
+
+/* «Разбор»: a PGN file's games (coach/pgnfile.py) */
+.pgn-list .hrow { grid-template-columns: 34px 1fr; }
+.pgn-list .hres { font-size: 11px; color: var(--muted); }
+.pgn-q { width: 100%; font: 13px var(--font-body); padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); }
+
+/* «Разбор»: the board editor — two rows of pieces to drag or pick, then the side to move and castling */
+.ed-box { display: grid; gap: 4px; }
+.ed-pal { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.ed-pc { aspect-ratio: 1; min-height: 44px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f0d9b5; cursor: grab; touch-action: none; } /* a light square: black pieces stay visible in the dark theme */
+.ed-pc.on { border-color: var(--accent-bg); box-shadow: inset 0 0 0 3px var(--accent-bg); background: #e2c48f; }
+.ed-box.cg-wrap piece { position: static; display: block; width: 100%; height: 100%; transform: none; z-index: auto; will-change: auto; pointer-events: none; } /* (pieces off the board, as .mat / .promo) */
+.ed-castle { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 13px; }
+.ed-cb { display: flex; align-items: center; gap: 6px; min-height: 30px; cursor: pointer; }
+.ed-cb.off { color: var(--muted); cursor: default; }

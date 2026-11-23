@@ -14,12 +14,11 @@ from pathlib import Path
 import anyio
 import chess
 
-from . import explain, history, scenes
+from . import explain, history, pgnfile, scenes
 from .config import DATA, PUZZLES
 from .engine import ENGINE
 from .scenes import SceneError
 
-MAX_SCENES = 300
 
 
 def load_json(path: Path, default):
@@ -189,7 +188,12 @@ def backfill_history() -> None:
 
 # ---------------- operations ----------------
 async def op_show(b: dict) -> dict:
-    """A new board; with `chat`, one more board of that chat (its active one now); the chat's other boards stay as they are."""
+    """A new board; with `chat`, one more board of that chat (its active one now); the chat's other boards stay as they are.
+    A puzzle's board («Разобрать на доске» in «Задачи») is made once: asked again, the same board comes back."""
+    for key in ("puzzle", "lpuzzle"):
+        old = next((s for s in S.study["scenes"] if b.get(key) and s.get(key) == b[key]), None)
+        if old is not None:
+            return await _reopen(old)
     S.study["seq"] += 1
     sc, first = scenes.make_scene(f"s{S.study['seq']}", b, current_fen())
     if "history" not in sc:
@@ -197,8 +201,7 @@ async def op_show(b: dict) -> dict:
     for key in ("puzzle", "lpuzzle", "chat", "game"):  # where it came from: app.js boardHome puts it in that mode
         if b.get(key):
             sc[key] = b[key]
-    S.study["scenes"].append(sc)
-    S.study["scenes"] = S.study["scenes"][-MAX_SCENES:]
+    S.study["scenes"].append(sc)  # (no cap: a board is never deleted to make room for another)
     S.study["current"] = sc["id"]
     S.save_study()
     goto = sc["root"]
@@ -208,6 +211,39 @@ async def op_show(b: dict) -> dict:
         await set_chat_board(sc["chat"], sc["id"])
     await broadcast({"type": "scene", "scene": sc, "goto": goto["id"]})
     return {"ok": True, "scene": sc["id"], "showing": node_info(sc, goto)["path"], "tree": tree_text(sc)}
+
+
+async def _reopen(sc: dict) -> dict:
+    S.study["current"] = sc["id"]
+    S.save_study()
+    await broadcast({"type": "scene", "scene": sc, "goto": "root"})
+    return {"ok": True, "scene": sc["id"], "reused": True}
+
+
+def op_pgn_games(b: dict) -> dict:
+    return {"games": pgnfile.games(b.get("pgn") or "")}
+
+
+async def op_pgn_open(b: dict) -> dict:
+    """One game of a PGN text as a board of «Разбор» (with `chat`: one more board of that chat). The same game opened
+    again brings its board back instead of a copy."""
+    game = pgnfile.read(b.get("pgn") or "", int(b.get("index") or 0))
+    key = pgnfile.key_of(game)
+    old = next((s for s in S.study["scenes"] if (s.get("pgn") or {}).get("key") == key), None)
+    if old is not None:
+        return await _reopen(old)
+    S.study["seq"] += 1
+    sc = pgnfile.scene(f"s{S.study['seq']}", game)
+    sc["history"] = await asyncio.to_thread(history.find, sc["root"]["fen"])
+    if b.get("chat"):
+        sc["chat"] = b["chat"]
+    S.study["scenes"].append(sc)
+    S.study["current"] = sc["id"]
+    S.save_study()
+    if sc.get("chat"):
+        await set_chat_board(sc["chat"], sc["id"])
+    await broadcast({"type": "scene", "scene": sc, "goto": "root"})
+    return {"ok": True, "scene": sc["id"]}
 
 
 async def op_add_line(b: dict) -> dict:

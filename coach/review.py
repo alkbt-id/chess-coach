@@ -18,7 +18,7 @@ import chess
 import chess.engine
 
 from . import config, jobs, live, scenes
-from .board import MAX_SCENES, S, broadcast
+from .board import S, broadcast
 from .engine import STOCKFISH, win_pct
 from .lichess import ACCOUNT
 
@@ -190,7 +190,6 @@ async def start(gid: str) -> dict:
                       "url": f"https://lichess.org/{gid}/{src['color']}", "opening": src.get("opening", ""),
                       "players": src["players"]}
         S.study["scenes"].append(sc)
-        S.study["scenes"] = S.study["scenes"][-MAX_SCENES:]
     S.study["current"] = sc["id"]
     if (sc.get("review") or {}).get("state") != "done" and not (sc["id"] in _tasks and not _tasks[sc["id"]].done()):
         sc["review"] = {"state": "queued", "done": 0, "total": len(_main_line(sc)) + 1}

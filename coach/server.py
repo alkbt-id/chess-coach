@@ -185,6 +185,16 @@ async def ui_add(request: Request):
     return JSONResponse(await board.op_add_line(b))
 
 
+@unlocked
+@guarded
+async def ui_pgn(request: Request):
+    """The games of a PGN text (the list of a file); with `index`, that game opened on a board."""
+    b = await body(request)
+    if b.get("index") is None:
+        return JSONResponse(await asyncio.to_thread(board.op_pgn_games, b))
+    return JSONResponse(await board.op_pgn_open(b))
+
+
 @guarded
 async def ui_delete_scene(request: Request):
     return JSONResponse(await board.op_delete_scene(await body(request)))
@@ -556,6 +566,7 @@ app = Starlette(
         Route("/api/scene/edit", ui_edit, methods=["POST"]),
         Route("/api/scene/add", ui_add, methods=["POST"]),
         Route("/api/scene/delete", ui_delete_scene, methods=["POST"]),
+        Route("/api/pgn", ui_pgn, methods=["POST"]),
         Route("/api/analyse", ui_analyse, methods=["POST"]),
         Route("/api/play", play, methods=["POST"]),
         Route("/api/reload", reload_ui, methods=["POST"]),
