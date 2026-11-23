@@ -1338,6 +1338,10 @@ function activeBoard(cid) {
   const own = boardsOf(cid);
   return own.find((s) => s.id === study.chatBoard[cid]) || own.at(-1) || null;
 }
+// a board of a repertoire lesson lives only in «Репертуар» (tabs next to the tree); «Разбор» has the rest, the
+// repertoire's trees aside
+const lessonBoard = (sc) => !!lessonSection(sc?.chat);
+const studyOwn = (sc) => !!sc && !sc.rep && !lessonBoard(sc);
 // a board made while a chat is open is one more board of that chat
 const claimChat = () => (ch.list.some((c) => c.id === ch.cur) ? ch.cur : undefined);
 
@@ -1682,7 +1686,7 @@ function boardTabsHtml() {
     if (!inLesson) return "";
     return `<div class="bt-scroll"><button type="button" class="btab${sc?.rep ? " on" : ""}" data-rep-tree>Дерево репертуара</button>${boards.map(tab).join("")}</div>${plus("Ещё одна доска этого урока")}`;
   }
-  const any = study.scenes.some((x) => !x.rep);
+  const any = study.scenes.some(studyOwn);
   return `<div class="bt-scroll">${sc ? scopeBoards(sc).map(tab).join("") : ""}</div>${plus(chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска")}
     ${any ? `<button type="button" class="ibtn" id="all-boards" aria-label="Все доски" title="Все доски всех чатов">${ICON.list}</button>` : ""}`;
 }
@@ -1696,9 +1700,9 @@ function renderBoardTabs() {
   $(".btab.on", el)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-// every board, grouped by chat (like «Все чаты»)
+// every board of «Разбор», grouped by chat (like «Все чаты»); the lessons' boards are in «Репертуар»
 function allBoardsMenuHtml() {
-  const groups = [...ch.list.map((c) => [chatLabel(c), boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && !s.rep)]]
+  const groups = [...ch.list.filter((c) => !lessonSection(c.id)).map((c) => [chatLabel(c), boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && !s.rep)]]
     .filter(([, l]) => l.length);
   return groups.map(([t, l]) => `<div class="menu-head">${esc(t)}</div>${l.map((x) => `<button type="button" class="mi${x.id === study.id ? " on" : ""}" data-act="board:${esc(x.id)}">${esc(x.title)}</button>`).join("")}`).join("");
 }
@@ -1794,7 +1798,7 @@ function renderStudy() {
   if (mode !== "study") return;
   const cur = scene();
   if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
-  if (cur && !cur.rep && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after «Репертуар»
+  if (studyOwn(cur) && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after «Репертуар»
   if (!preview) studyBoard();
   renderStudyPanel();
   renderBoardTabs();
@@ -5098,8 +5102,8 @@ function setMode(m, { save = true, follow = "screen" } = {}) {
   renderBoardTabs();
   if (rep.on) repEnter();
   else if (m === "study") {
-    if (follow === "screen" && (wasRep || scene()?.rep)) {
-      const last = study.scenes.find((s) => s.id === study.last?.id && !s.rep);
+    if (follow === "screen" && (wasRep || (scene() && !studyOwn(scene())))) {
+      const last = study.scenes.find((s) => s.id === study.last?.id && studyOwn(s));
       study.id = last?.id ?? null;
       study.node = last && tindex(last).has(study.last.node) ? study.last.node : "root";
     }
@@ -5181,13 +5185,14 @@ async function onEvent(ev) {
       if (ev.scene.rep) { onRepScene(ev); break; }
       upsertScene(ev.scene);
       checkPendingClaude(ev.scene);
-      // a chat working in the background does not take the board away from the chat the user is in
-      if (ev.goto && !isLive() && (!chatOf(ev.scene) || ev.scene.chat === ch.cur || ev.scene.id === study.id)) {
+      // a chat working in the background does not take the board away from the chat the user is in;
+      // a lesson's board comes on screen only in «Репертуар»
+      if (ev.goto && !isLive() && (!lessonBoard(ev.scene) || rep.on) && (!chatOf(ev.scene) || ev.scene.chat === ch.cur || ev.scene.id === study.id)) {
         closePreviewSilently();
         study.id = ev.scene.id;
         study.node = ev.goto;
         // a board of a lesson stays in «Репертуар»; any other board goes to «Разбор»
-        if (mode !== "study" || (rep.on && !rep.data.lessons[ev.scene.chat])) setMode("study", { save: false, follow: "board" });
+        if (mode !== "study" || (rep.on && !lessonBoard(ev.scene))) setMode("study", { save: false, follow: "board" });
         else { renderStudy(); followBoard(); }
       } else if (mode === "study" && study.id === ev.scene.id && ev.origin !== CLIENT) {
         if (!tindex(ev.scene).has(study.node)) study.node = "root";
@@ -5197,7 +5202,7 @@ async function onEvent(ev) {
       break;
     case "goto": {
       const sc = study.scenes.find((s) => s.id === ev.scene);
-      if (isLive() || (chatOf(sc) && sc.chat !== ch.cur && sc.id !== study.id)) break;
+      if (isLive() || (lessonBoard(sc) && !rep.on) || (chatOf(sc) && sc.chat !== ch.cur && sc.id !== study.id)) break;
       closePreviewSilently();
       study.id = ev.scene;
       study.node = ev.node;
@@ -5296,7 +5301,7 @@ async function init() {
     try { rep.section = localStorage.getItem("rep.section") || null; } catch {}
     study.chatBoard = s.settings.chat_boards || {};
     study.id = s.study.current || study.scenes.at(-1)?.id || null;
-    const last = study.scenes.find((x) => x.id === study.id && !x.rep) || study.scenes.filter((x) => !x.rep).at(-1);
+    const last = study.scenes.find((x) => x.id === study.id && studyOwn(x)) || study.scenes.filter(studyOwn).at(-1);
     study.last = last ? { id: last.id, node: "root" } : null;
     study.engine = !!s.settings.engine;
     study.autoAsk = s.settings.autoAsk !== false;
