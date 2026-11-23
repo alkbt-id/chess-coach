@@ -2616,90 +2616,12 @@ window.addEventListener("focus", async () => { // back from the browser after co
   if (lp.on && mode === "puzzle" && !lp.status?.account?.connected) { await lpRefresh(); renderPuzzlePanel(); }
 });
 
-// ---------------- rating ladder ----------------
-// user rating, games, best, history [[time, id, ok, delta, rating]], per-puzzle rating corrections
-const ladder = { on: false, rating: 1500, games: 0, best: 1500, hist: [], pr: {} };
-const saveLadder = () => http.send("PUT", "/api/settings", { ladder }).catch(() => {});
-
-function probit(q) { // inverse normal CDF (Acklam)
-  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
-  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
-  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
-  const tail = (t) => (((((c[0] * t + c[1]) * t + c[2]) * t + c[3]) * t + c[4]) * t + c[5]) / ((((d[0] * t + d[1]) * t + d[2]) * t + d[3]) * t + 1);
-  if (q < 0.02425) return tail(Math.sqrt(-2 * Math.log(q)));
-  if (q > 0.97575) return -tail(Math.sqrt(-2 * Math.log(1 - q)));
-  const t = q - 0.5, r = t * t;
-  return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * t) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
-}
-
-// how hard a puzzle is, from its engine data: few moves that hold, a quiet best move, a deep point
-function difficultyScore(p) {
-  const ws = Object.values(p.moves).map((m) => m[0]).sort((x, y) => y - x);
-  const best = ws[0], second = ws[1] ?? 0, total = ws.length;
-  const good = ws.filter((w) => best - w <= PASS).length;
-  let score = 2 * (1 - good / total);
-  score += good === 1 ? 0.9 : good === 2 ? 0.45 : good <= 4 ? 0.15 : -0.3;
-  if (best - second > 25) score += 0.3;
-  const c = new Chess(p.fen);
-  const me = p.fen.split(" ")[1];
-  let depth = 0, bal = 0;
-  for (const [i, u] of [p.best, ...(p.moves[p.best][1] || [])].entries()) {
-    let m;
-    try { m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); } catch { break; }
-    if (i === 0) score += m.san.includes("+") ? -0.5 : m.captured ? -0.35 : 0.45; // forcing moves are easier to find
-    if (m.captured) bal += (m.color === me ? 1 : -1) * ({ p: 1, n: 3, b: 3, r: 5, q: 9 }[m.captured] || 0);
-    if (bal >= 2 && !depth) depth = i + 1;
-  }
-  if (p.kind === "missed") score += 0.35 + Math.min(depth || 6, 8) * 0.12;
-  return score;
-}
-
-// spread the puzzles over a rating scale (mean 1500, sd 330) by their difficulty rank
-function assignRatings(list) {
-  const scored = list.map((p) => [difficultyScore(p), p]).sort((x, y) => x[0] - y[0]);
-  scored.forEach(([, p], i) => { p._r0 = Math.max(800, Math.min(2300, Math.round(1500 + 330 * probit((i + 0.5) / scored.length)))); });
-}
-const puzzleRating = (p) => Math.round((p._r0 ?? 1500) + (ladder.pr[p.id] || 0));
-
-function pickLadder() {
-  const all = pz.list.filter((p) => match(p) && p !== pz.cur);
-  const lately = new Set(recent.slice(-RECENT));
-  let pool = all.filter((p) => !lately.has(p.id) && (pz.prog[p.id]?.box || 0) < 3);
-  if (!pool.length) pool = all;
-  const target = ladder.rating + 30;
-  const near = pool.map((p) => [Math.abs(puzzleRating(p) - target) + (pz.prog[p.id] ? 60 : 0), p]).sort((x, y) => x[0] - y[0]).slice(0, 6);
-  return near[Math.floor(Math.random() * near.length)]?.[1] || null;
-}
-
-function rateAttempt(p, ok) {
-  const P = puzzleRating(p), U = ladder.rating;
-  const expected = 1 / (1 + 10 ** ((P - U) / 400));
-  const K = ladder.games < 10 ? 60 : ladder.games < 30 ? 36 : 22;
-  const delta = Math.round(K * ((ok ? 1 : 0) - expected));
-  ladder.rating = U + delta;
-  ladder.games++;
-  ladder.best = Math.max(ladder.best, ladder.rating);
-  ladder.pr[p.id] = (ladder.pr[p.id] || 0) - Math.round(12 * ((ok ? 1 : 0) - expected));
-  ladder.hist = [...ladder.hist, [Date.now(), p.id, ok ? 1 : 0, delta, ladder.rating]].slice(-500);
-  pz.st.rated = { before: U, after: ladder.rating, delta, P };
-  saveLadder();
-}
-
-function ladderHtml() {
-  const last = ladder.hist.slice(-12).map((h) => `<span class="${h[2] ? "ok" : "bad"}">${h[2] ? "✓" : "✗"}</span>`).join("");
-  const solved = ladder.hist.filter((h) => h[2]).length;
-  return `<div class="ladder"><div class="lr"><b>${ladder.rating}</b><span>твой рейтинг задач</span></div>
-    <div class="lr-meta">лучший ${ladder.best} · решено ${solved} из ${ladder.hist.length}${last ? ` · <span class="lr-last">${last}</span>` : ""}</div></div>`;
-}
-
 function match(p, f = pz.filt) {
   if (pz.only && !pz.only.ids.has(p.id)) return false; // the puzzles of a repertoire section (REPERTOIRE)
   return (f.kind === "all" || p.kind === f.kind) && (f.phase === "all" || p.phase === f.phase) && (f.color === "all" || p.color === f.color);
 }
 
 function pickNext() {
-  if (ladder.on) return pickLadder();
   const now = Date.now();
   const all = pz.list.filter((p) => match(p) && p !== pz.cur);
   const lately = new Set(recent.slice(-RECENT));
@@ -2713,7 +2635,6 @@ function pickNext() {
 }
 
 function record(p, ok) {
-  if (ladder.on) rateAttempt(p, ok);
   const old = pz.prog[p.id] || {};
   const box = ok ? Math.min((old.box || 0) + 1, INTERVALS.length - 1) : 0;
   const now = Date.now();
@@ -2919,8 +2840,7 @@ function renderPuzzlePanel() {
   const due = pz.list.filter((x) => pz.prog[x.id] && pz.prog[x.id].due <= Date.now()).length;
   const pm = (k, on, label, title, extra = "") => `<button type="button" role="tab" data-pmode="${k}" class="${on ? "on" : ""}" aria-selected="${on}" title="${title}">${label}${extra}</button>`;
   let html = `<div class="seg wide" role="tablist" aria-label="Вид задач">
-      ${pm("srs", !ladder.on && !lp.on, "Повторение", "Задачи из твоих партий возвращаются на повтор: ошибки — скоро, решённые — всё реже", due ? `<span class="badge">${due}</span>` : "")}
-      ${pm("ladder", ladder.on && !lp.on, "На рейтинг", "Задачи из твоих партий под твой рейтинг: решил — рейтинг растёт и задачи сложнее")}
+      ${pm("srs", !lp.on, "Повторение", "Задачи из твоих партий возвращаются на повтор: ошибки — скоро, решённые — всё реже", due ? `<span class="badge">${due}</span>` : "")}
       ${pm("lichess", lp.on, "Lichess", "Задачи с Lichess в твой рейтинг на Lichess, подбор под твои слабости")}
     </div>`;
   const op = lp.on ? lpOpening() : null;
@@ -2954,10 +2874,6 @@ function renderPuzzlePanel() {
     } else {
       html += `<div class="result fail"><h3>Не то: <span class="san">${esc(r.san)}</span></h3>${whyHtml(st.why)}</div>`;
       if (st.solution) html += `<div class="result info"><h3>Решение</h3>${whyHtml(st.best)}</div>`;
-    }
-    if (st.rated) {
-      const d = st.rated.delta;
-      html += `<p class="rdelta">Рейтинг ${st.rated.before} → <b>${st.rated.after}</b> <span class="${d >= 0 ? "up" : "down"}">(${d >= 0 ? "+" : ""}${d})</span> · сложность задачи ${st.rated.P}</p>`;
     }
     html += `<div class="meter">${meter("лучший ход", p._best, "good")}${meter("твой ход", r.w, r.ok ? "good" : "bad")}${meter("в партии", p.moves[p.played][0], "bad")}</div>`;
   } else if (st.solution) {
@@ -3011,10 +2927,9 @@ $("#panel").addEventListener("click", async (e) => {
       if (!lp.cur) lpNext(); else { lpBoard(); renderPuzzlePanel(); followActivity(); }
       return;
     }
-    if (wasLp) { closePreviewSilently(); puzzleBoard(); renderMeta(); followActivity(); }
-    ladder.on = t.dataset.pmode === "ladder";
-    saveLadder();
-    if (!st?.result && !st?.solution) nextPuzzle(); else renderPuzzlePanel();
+    if (!wasLp) return; // «Повторение» is already on screen
+    closePreviewSilently(); puzzleBoard(); renderMeta(); followActivity();
+    if (!pz.cur) nextPuzzle(); else renderPuzzlePanel(); // back to the puzzle that was on screen
     return;
   }
   if (t.id === "pz-filter") {
@@ -3068,12 +2983,11 @@ function renderMeta() {
     <a href="https://lichess.org/${esc(p.game)}/${p.color}#${p.ply - 1}" target="_blank" rel="noopener">Партия на Lichess ↗</a>`;
 }
 
-// one line under the switch: the repetition's numbers, or the rating ladder
+// one line under the switch: the repetition's numbers
 function renderStats() {
   const el = $("#stats");
   updateCounts();
   if (!el) return;
-  if (ladder.on) { el.innerHTML = ladderHtml(); return; }
   const now = Date.now();
   const pool = pz.list.filter((p) => match(p));
   const seen = pool.filter((p) => pz.prog[p.id]);
@@ -5674,7 +5588,6 @@ async function onEvent(ev) {
       const list = await http.get("/api/puzzles");
       pz.list = list;
       pz.byId = Object.fromEntries(list.map((p) => [p.id, p]));
-      assignRatings(list);
       if (mode === "puzzle") renderPuzzlePanel();
       updateCounts();
       break;
@@ -5749,8 +5662,6 @@ async function init() {
     $("#auto-ask").checked = study.autoAsk;
     pz.list = list;
     pz.byId = Object.fromEntries(list.map((p) => [p.id, p]));
-    assignRatings(list);
-    Object.assign(ladder, s.settings.ladder || {});
     pz.prog = s.progress || {};
     pz.filt = { ...pz.filt, ...(s.settings.filter || {}) };
     if (Array.isArray(s.settings.recent)) recent = [...new Set([...s.settings.recent, ...recent])].slice(-60);
