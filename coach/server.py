@@ -309,6 +309,11 @@ async def chat_delete(request: Request):
     return JSONResponse({"ok": True})
 
 
+@guarded
+async def chat_clear(request: Request):
+    return JSONResponse({"cleared": await CHATS.clear(request.path_params["cid"])})
+
+
 async def chat_bind(request: Request):
     """An older chat about a puzzle, a game… chosen again (in «Все чаты»): it is that thing's chat again."""
     chat = CHATS.chats.get(request.path_params["cid"])
@@ -562,6 +567,7 @@ app = Starlette(
         Route("/api/chat/{cid}/delete", chat_delete, methods=["POST"]),
         Route("/api/chat/{cid}/close", chat_close, methods=["POST"]),
         Route("/api/chat/{cid}/bind", chat_bind, methods=["POST"]),
+        Route("/api/chat/{cid}/clear", chat_clear, methods=["POST"]),
         Route("/api/lichess", li_state),
         Route("/api/lichess/login", li_login),
         Route("/api/lichess/callback", li_callback),

@@ -331,6 +331,8 @@ class Chat:
         self.client: ClaudeSDKClient | None = None
         self.busy = False
         self.closing = False  # closed during a reply: stop Claude once the reply is done
+        self.clearing = False  # «Очистить чат» in a lesson: cleared once Claude has written the lesson's notes
+        self.held: list[dict] = []  # messages sent while it waits to be cleared: they go into the cleared chat
         self.perms: dict[str, asyncio.Future] = {}
         self.always: set[str] = set()
         self.streaming: list[dict] = []
@@ -342,7 +344,8 @@ class Chat:
 
     def info(self) -> dict:
         """meta + what waits for Claude (not saved: the queue lives only while the app runs)"""
-        return {**self.meta(), "queued": [{"text": w["note"] or w["text"], "note": bool(w["note"])} for w in self.waiting]}
+        return {**self.meta(), "queued": [{"text": w["note"] or w["text"], "note": bool(w["note"])} for w in self.waiting]
+                + [{"text": h["text"], "note": False} for h in self.held]}
 
     def save(self) -> None:
         save_json(CHATS_DIR / f"{self.id}.json", self.entries)
@@ -461,6 +464,46 @@ class ChatManager:
         else:
             await self._stop_worker(chat)
 
+    async def clear(self, cid: str) -> bool:
+        """«Очистить чат»: its messages go and the next one starts a new Claude session; it stays the chat of its
+        boards, lesson, puzzle… A reply in progress is stopped. A lesson with something not in its notes yet is
+        cleared after Claude has written them (False: not cleared yet)."""
+        chat = self.chats[cid]
+        if chat.clearing:
+            return False
+        if cid in repertoire.REP.d["lessons"] and not S.lock and repertoire.REP.notes_due(chat):
+            chat.clearing = True
+            await repertoire.REP.ask_notes(chat)
+            return False
+        await self._wipe(chat)
+        return True
+
+    async def _wipe(self, chat: Chat, stop: bool = True) -> None:
+        """stop=False: called by the chat's own worker as it ends (it cannot stop itself)."""
+        chat.clearing = False
+        for fut in chat.perms.values():
+            if not fut.done():
+                fut.set_result((False, False))
+        chat.perms.clear()
+        if stop:
+            await self._stop_worker(chat)
+        else:
+            chat.worker, chat.client, chat.busy = None, None, False
+        chat.waiting.clear()
+        chat.queue = asyncio.Queue()
+        chat.entries, chat.streaming = [], []
+        chat.session_id = None
+        chat.title = "Новый чат"
+        chat.closing = False
+        chat.updated = time.time()
+        chat.save()
+        self.save_meta()
+        await broadcast({"type": "chat_cleared", "chat": chat.id})
+        await self.emit_list()
+        held, chat.held = chat.held, []
+        for h in held:
+            await self.send(chat.id, h["text"], key=h["key"])
+
     async def configure(self, cid: str, model: str | None, effort: str | None) -> None:
         chat = self.chats[cid]
         changed = False
@@ -482,6 +525,10 @@ class ChatManager:
         if S.lock:  # a live Lichess game: no outside help (coach/lichess.py)
             raise ValueError(S.lock)
         chat = self.chats[cid]
+        if chat.clearing and not note:  # it is about to be cleared: the message goes into the cleared chat
+            chat.held.append({"text": text, "key": key})
+            await self.emit_list()
+            return
         if not note and chat.title == "Новый чат":
             chat.title = text.strip().split("\n")[0][:48] or "Чат"
         chat.updated = time.time()
@@ -594,7 +641,7 @@ class ChatManager:
                         chat.updated = time.time()
                         self.save_meta()
                         await self.emit_list()
-                    if chat.closing and chat.queue.empty():  # it was closed during the reply
+                    if (chat.closing or chat.clearing) and chat.queue.empty():  # closed or to be cleared meanwhile
                         chat.closing = False
                         break
         except asyncio.CancelledError:
@@ -605,6 +652,8 @@ class ChatManager:
             chat.client = None
             chat.busy = False
             await self.emit_list()
+        if chat.clearing:  # a lesson's notes are written: now it is cleared
+            await self._wipe(chat, stop=False)
 
     async def _handle(self, chat: Chat, msg) -> None:
         if isinstance(msg, SystemMessage):

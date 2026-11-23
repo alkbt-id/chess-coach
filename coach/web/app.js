@@ -2708,7 +2708,7 @@ function renderPuzzle() {
 // =====================================================================
 // CHAT — Claude inside the app
 // =====================================================================
-const ch = { list: [], cur: null, entries: new Map(), models: [], efforts: [], open: true, delConfirm: false, for: {}, unread: new Set(), busy: new Set() };
+const ch = { list: [], cur: null, entries: new Map(), models: [], efforts: [], open: true, confirm: null, for: {}, unread: new Set(), busy: new Set() };
 const TOOL_LABEL = {
   board_state: "Смотрит на доску", show: "Показывает позицию", add_line: "Добавляет вариант", annotate: "Пишет комментарий на доске",
   goto: "Переводит доску", edit: "Правит дерево вариантов", analyse: "Считает Stockfish", puzzles: "Смотрит задачи",
@@ -2890,8 +2890,8 @@ async function freshChat(key) {
   } catch (err) { setStatus(String(err.message), true); }
 }
 
-// The chat's model and effort: a chip at the bottom of the chat; it opens a menu with both and «Удалить чат…»
-// (deleting asks again inside the same menu)
+// The chat's model and effort: a chip at the bottom of the chat; it opens a menu with both, «Очистить чат…» and
+// «Удалить чат…» (both ask again inside the same menu: ch.confirm = "clear" | "del")
 const modelName = (id) => ch.models.find((m) => m.id === id)?.name || id;
 function renderChatOpts() {
   const c = curChat();
@@ -2904,14 +2904,19 @@ function renderModelPop() {
   const c = curChat();
   if (!c) pop.hidden = true;
   if (pop.hidden) return;
-  pop.innerHTML = ch.delConfirm
+  const lesson = !!rep.data.lessons[c.id];
+  pop.innerHTML = ch.confirm === "del"
     ? `<div class="menu-confirm"><b>Удалить этот чат?</b><span>Разговор пропадёт; его доски останутся в «Разборе».</span>
         <div class="actions"><button type="button" class="btn danger" data-chat-del="yes">Удалить</button><button type="button" class="btn quiet" data-chat-del="no">Отмена</button></div></div>`
+    : ch.confirm === "clear"
+    ? `<div class="menu-confirm"><b>Очистить этот чат?</b><span>Сообщения пропадут, Claude начнёт разговор заново${c.busy ? " (его ответ прервётся)" : ""}. Доски останутся.${lesson ? " Конспект урока Claude сначала допишет." : ""}</span>
+        <div class="actions"><button type="button" class="btn danger" data-chat-clear="yes">Очистить</button><button type="button" class="btn quiet" data-chat-clear="no">Отмена</button></div></div>`
     : `<div class="menu-head">Модель</div>
       ${ch.models.map((m) => `<button type="button" class="mi" data-model="${m.id}" aria-checked="${m.id === c.model}" role="menuitemradio">${esc(m.name)}${m.id === c.model ? '<span class="k">✓</span>' : ""}</button>`).join("")}
       <div class="menu-head">Сколько думать</div>
       <div class="seg">${ch.efforts.map((e) => `<button type="button" data-effort="${e}" class="${e === c.effort ? "on" : ""}" aria-pressed="${e === c.effort}">${e}</button>`).join("")}</div>
       <div class="menu-sep"></div>
+      ${emptyChat(c) ? "" : `<button type="button" class="mi" data-chat-clear="ask">Очистить чат…</button>`}
       <button type="button" class="mi danger" data-chat-del="ask">Удалить чат…</button>`;
   const r = $("#chat-model-btn").getBoundingClientRect();
   pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
@@ -3001,7 +3006,7 @@ function renderChat() { renderChatHead(); renderChatOpts(); renderChatLog(); ren
 // follow: in «Разбор» the board follows the chat (its board, or an empty one for a chat without a board)
 async function openChat(id, { follow = true } = {}) {
   ch.cur = id;
-  ch.delConfirm = false;
+  ch.confirm = null;
   if (id) ch.unread.delete(id);
   if (id && !ch.entries.has(id)) {
     try { const d = await http.get(`/api/chat/${id}`); ch.entries.set(id, d.entries); } catch { ch.entries.set(id, []); }
@@ -3126,7 +3131,7 @@ $("#chat-model-btn").addEventListener("click", (e) => {
   e.stopPropagation();
   const pop = $("#model-pop");
   pop.hidden = !pop.hidden;
-  ch.delConfirm = false;
+  ch.confirm = null;
   renderModelPop();
 });
 $("#model-pop").addEventListener("click", async (e) => {
@@ -3136,10 +3141,18 @@ $("#model-pop").addEventListener("click", async (e) => {
   if (!b || !c) return;
   if (b.dataset.model) { c.model = b.dataset.model; post(`/api/chat/${c.id}/config`, { model: c.model }); renderChatOpts(); }
   else if (b.dataset.effort) { c.effort = b.dataset.effort; post(`/api/chat/${c.id}/config`, { effort: c.effort }); renderChatOpts(); }
-  else if (b.dataset.chatDel === "ask" || b.dataset.chatDel === "no") { ch.delConfirm = b.dataset.chatDel === "ask"; renderModelPop(); }
-  else if (b.dataset.chatDel === "yes") {
+  else if (b.dataset.chatDel === "ask" || b.dataset.chatClear === "ask") { ch.confirm = b.dataset.chatDel ? "del" : "clear"; renderModelPop(); }
+  else if (b.dataset.chatDel === "no" || b.dataset.chatClear === "no") { ch.confirm = null; renderModelPop(); }
+  else if (b.dataset.chatClear === "yes") {
+    ch.confirm = null;
+    $("#model-pop").hidden = true;
+    try {
+      const r = await post(`/api/chat/${c.id}/clear`);
+      if (!r.cleared) { setStatus("Чат очистится, когда Claude допишет конспект урока"); setTimeout(() => setStatus(""), 5000); }
+    } catch (err) { setStatus(String(err.message), true); }
+  } else if (b.dataset.chatDel === "yes") {
     const id = c.id;
-    ch.delConfirm = false;
+    ch.confirm = null;
     $("#model-pop").hidden = true;
     await post(`/api/chat/${id}/delete`);
     ch.entries.delete(id);
@@ -3149,12 +3162,18 @@ $("#model-pop").addEventListener("click", async (e) => {
   }
 });
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#model-pop, #chat-model-btn")) { $("#model-pop").hidden = true; ch.delConfirm = false; }
+  if (!e.target.closest("#model-pop, #chat-model-btn")) { $("#model-pop").hidden = true; ch.confirm = null; }
 });
 $("#chat-toggle").addEventListener("click", () => setChatOpen(!ch.open));
 
 let deltaFrame = null;
 function onChatEvent(ev) {
+  if (ev.type === "chat_cleared") { // «Очистить чат» (here or in another window): the next message starts anew
+    ch.entries.set(ev.chat, []);
+    ch.unread.delete(ev.chat);
+    if (ev.chat === ch.cur) { renderChatLog(); renderChatOpts(); }
+    return;
+  }
   if (ev.type === "chat_list") {
     ch.list = ev.chats;
     // a reply finished in a chat that is not on screen: a dot on «Все чаты» until it is opened
@@ -5238,7 +5257,7 @@ async function onEvent(ev) {
       else if (pz.cur && !pz.st.result) onPuzzleMove(m.from, m.to);
       break;
     }
-    case "chat_list": case "chat_entry": case "chat_delta": onChatEvent(ev); break;
+    case "chat_list": case "chat_entry": case "chat_delta": case "chat_cleared": onChatEvent(ev); break;
     case "rep_play": // Claude of the open chat started a training game
       if (ev.by_chat && ev.by_chat === ch.cur && !isLive() && repSec(ev.section)) {
         rep.section = ev.section;
