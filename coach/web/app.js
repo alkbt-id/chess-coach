@@ -512,6 +512,83 @@ function setStatus(text, bad = false) {
   el.classList.toggle("bad", bad);
 }
 
+// ---------------- small shared pieces of the interface ----------------
+// drawn icons (not characters: the iPad shows some of those as colour emoji)
+const svg = (body, cls = "") => `<svg class="ico${cls}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+const ICON = {
+  dots: svg('<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>', " fill"),
+  spark: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>', " fill accent"),
+  play: svg('<circle cx="12" cy="12" r="9"/><path d="M10 8.5l5.5 3.5-5.5 3.5z"/>'),
+  target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>'),
+  list: svg('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  refresh: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>'),
+  lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  filter: svg('<path d="M4 6h16M7 12h10M10 18h4"/>'),
+};
+// the ⋯ of a block: opens its menu (rare actions live there)
+const dotsBtn = (id, label) => `<button type="button" class="ibtn" id="${id}" aria-label="${esc(label)}" title="${esc(label)}">${ICON.dots}</button>`;
+
+// «?»: a short explanation opened by a tap (a touch screen has no hover), instead of paragraphs always on screen;
+// an open one stays open when its panel renders again
+const helpOpen = new Set();
+const helpBtn = (key) => `<button type="button" class="help-btn" data-help="${key}" aria-expanded="${helpOpen.has(key)}" aria-label="Пояснение" title="Пояснение">?</button>`;
+const helpText = (key, html) => `<div class="help-text" data-help-for="${key}"${helpOpen.has(key) ? "" : " hidden"}>${html}</div>`;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".help-btn");
+  if (!b) return;
+  const k = b.dataset.help;
+  const on = !helpOpen.has(k);
+  if (on) helpOpen.add(k); else helpOpen.delete(k);
+  for (const x of $$(`.help-btn[data-help="${k}"]`)) x.setAttribute("aria-expanded", String(on));
+  for (const x of $$(`[data-help-for="${k}"]`)) x.hidden = !on;
+});
+
+// A menu under a button of the panel (⋯ of a section, «Сыграть», «Задачи», a filter…). Its buttons carry data-act and
+// go to the handler given when it opened; a handler that returns true keeps it open (it showed something else in it,
+// e.g. «Удалить?» — a delete always asks again inside its menu). The same button closes it again.
+const pmenu = { on: null, anchor: null };
+function placeMenu(el, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let left = r.right - w;
+  if (left < 8) left = Math.min(r.left, innerWidth - w - 8);
+  let top = r.bottom + 6;
+  if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  el.style.left = `${Math.max(8, left)}px`;
+  el.style.top = `${top}px`;
+}
+function openMenu(anchor, html, on) {
+  const el = $("#pmenu");
+  if (!el.hidden && pmenu.anchor === anchor.id) { closeMenu(); return; }
+  el.innerHTML = html;
+  el.hidden = false;
+  pmenu.on = on;
+  pmenu.anchor = anchor.id;
+  placeMenu(el, anchor);
+}
+function setMenu(html) { // new content in the open menu
+  const el = $("#pmenu");
+  el.innerHTML = html;
+  const a = pmenu.anchor && document.getElementById(pmenu.anchor);
+  if (a) placeMenu(el, a);
+}
+function closeMenu() { $("#pmenu").hidden = true; pmenu.on = null; pmenu.anchor = null; }
+const confirmHtml = (title, text, act, label) => `<div class="menu-confirm"><b>${title}</b>${text ? `<span>${text}</span>` : ""}
+  <div class="actions"><button type="button" class="btn danger" data-act="${act}">${label}</button><button type="button" class="btn quiet" data-act="cancel">Отмена</button></div></div>`;
+$("#pmenu").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const b = e.target.closest("[data-act]");
+  if (!b || b.disabled) return;
+  let keep = false;
+  try { keep = await pmenu.on?.(b.dataset.act, b); } catch (err) { setStatus(String(err.message), true); }
+  if (!keep) closeMenu();
+});
+document.addEventListener("click", (e) => {
+  if ($("#pmenu").hidden || e.target.closest("#pmenu") || (pmenu.anchor && e.target.closest(`[id="${pmenu.anchor}"]`))) return;
+  closeMenu();
+});
+
 // =====================================================================
 // PREVIEW — a line clicked in text, shown on the board without changing anything
 // =====================================================================
@@ -1301,6 +1378,10 @@ function lineIds(root, cur) {
 }
 // the ⋯ of the current move: its menu without a right click (set only while a board's own tree renders)
 let menuAt = null;
+// labels on moves of a repertoire tree: the sections that start there and the places the user's games left the
+// preparation (nodeId -> html; set only while a section's tree renders)
+let repTags = null;
+const tagsHtml = (n) => repTags?.get(n.id) || "";
 const menuBtn = (n) => (n.id === menuAt
   ? `<button type="button" class="mv-menu" data-menu="${n.id}" aria-label="Действия с ходом" title="Действия с ходом"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>`
   : "");
@@ -1328,7 +1409,7 @@ function rowHtml(cur, { space = false, lead = false } = {}) {
       else if (!(on && open)) { close(); sp(); if (on) { h += '<span class="lrun">'; open = true; } }
       sp();
       h += moveHtml(n, cur, force);
-      const after = labelHtml(n) + askHtml(n);
+      const after = labelHtml(n) + askHtml(n) + tagsHtml(n);
       if (after) { close(); h += after; }
       space = true;
     },
@@ -1433,9 +1514,10 @@ function seqHtml(first, cur, rest = false, lead = false) {
   return row.end();
 }
 // a board's own tree in «Разбор» / «Репертуар»: its current move gets the ⋯ of its menu
-function boardTreeHtml(root, key) {
+function boardTreeHtml(root, key, tags = null) {
   menuAt = study.node;
-  try { return treeHtml(root, study.node, key); } finally { menuAt = null; }
+  repTags = tags;
+  try { return treeHtml(root, study.node, key); } finally { menuAt = null; repTags = null; }
 }
 function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
@@ -1451,9 +1533,10 @@ function treeHtml(root, cur, key = root.fen || root.id) {
     if (white) h += idxCell(main.num) + treeMove(main, cur);
     else { if (needIdx) h += `${idxCell(main.num)}<span class="tm empty">…</span>`; h += treeMove(main, cur); }
     needIdx = false;
-    if (main.comment || alts.length || main.id === askAt) {
+    const tags = tagsHtml(main);
+    if (main.comment || alts.length || main.id === askAt || tags) {
       if (white) h += '<span class="tm empty"></span>';
-      h += `<div class="inter">${askHtml(main)}${commentHtml(main, cur)}${alts.length ? linesHtml(alts, cur) : ""}</div>`;
+      h += `<div class="inter">${tags ? `<div class="tags">${tags}</div>` : ""}${askHtml(main)}${commentHtml(main, cur)}${alts.length ? linesHtml(alts, cur) : ""}</div>`;
       needIdx = true;
     }
     node = main;
@@ -3536,6 +3619,7 @@ function applyLock() {
     hideHover();
     $("#ctx").hidden = $("#jobs-pop").hidden = $("#chats-pop").hidden = $("#app-menu").hidden = $("#model-pop").hidden = true;
     setDrawMode(false);
+    closeMenu();
     clearTimeout(askTimer);
     clearTimeout(ceval.timer);
     ceval.seq++;
@@ -3605,11 +3689,11 @@ function repPanelHtml() {
   return s ? repSectionHtml(s) : repTocHtml();
 }
 
-// «Задачи»: the user's puzzles from the section's games and Lichess's puzzles of its opening, solved in «Задачи»
-function repPuzzleButtons(s) {
-  return `<div class="rep-drill"><span class="bt-label">Задачи:</span>
-    ${s.puzzles ? `<button type="button" class="btn small" id="puz-own" title="Позиции из твоих партий этого раздела, где ты ошибся или не наказал ошибку">Мои из этих партий · ${s.puzzles}</button>` : ""}
-    <button type="button" class="btn small" id="puz-lichess" title="Задачи Lichess из партий в этом дебюте, в твой рейтинг на Lichess">Lichess в этом дебюте</button></div>`;
+// «Задачи» of a section: the user's puzzles from its games and Lichess's puzzles of its opening, solved in «Задачи»
+function repPuzzleMenu(s) {
+  return `<div class="menu-head">Задачи по дебюту</div>
+    ${s.puzzles ? `<button type="button" class="mi" data-act="own" title="Позиции из твоих партий этого раздела, где ты ошибся или не наказал ошибку">Мои из этих партий<span class="k">${s.puzzles}</span></button>` : ""}
+    <button type="button" class="mi" data-act="lichess" title="Задачи Lichess из партий в этом дебюте, в твой рейтинг на Lichess">Lichess в этом дебюте</button>`;
 }
 
 async function repOwnPuzzles(s) {
@@ -3632,56 +3716,82 @@ async function repLichessPuzzles(s) {
   setMode("puzzle");
 }
 
-// «Сыграть с движком» and the opponent's strength (kept in this window)
-function repGameButton() {
+// «Сыграть» of a section: the opponent's strength (kept in this window) and the start
+function repPlayMenu(s) {
   const elo = repElo();
-  return `<div class="rep-drill"><button type="button" class="btn small" id="game-start">Сыграть с движком</button>
-    <label class="hint">соперник ≈ <select id="game-elo">${REP_ELO.map((e) => `<option value="${e}"${e === elo ? " selected" : ""}>${e}</option>`).join("")}</select></label>
-    <span class="hint">сначала по твоему дереву, потом Stockfish</span></div>`;
+  return `<div class="menu-head">Партия с движком</div>
+    <div class="menu-note">Ты ${s.color === "white" ? "белыми" : "чёрными"}. Соперник ходит по твоему дереву, дальше — Stockfish.</div>
+    <div class="menu-head">Соперник примерно</div>
+    <div class="seg">${REP_ELO.map((e) => `<button type="button" data-act="elo:${e}" class="${e === elo ? "on" : ""}" aria-pressed="${e === elo}">${e}</button>`).join("")}</div>
+    <div class="menu-pad"><button type="button" class="btn primary full" data-act="start">Начать партию</button></div>`;
 }
 
-// «Тренировать»: what is due, or a run over everything when nothing is
+// «Повторить по памяти»: what is due — the one primary button of the screen; when nothing is due, a run over
+// everything, as a plain button; nothing to drill (no moves of the user's yet) — no button
 function repDrillButton(scope, id) {
   const cards = drillCardsIn(scope);
-  if (!cards) return `<p class="hint">Тренировать пока нечего: в дереве нет твоих ходов${scope.section ? " в этом разделе" : ""}.</p>`;
+  if (!cards) return "";
   const due = drillDueIn(scope);
-  return `<div class="rep-drill"><button type="button" class="btn small primary" id="${id}" data-practice="${due ? "" : "1"}">${due ? `Тренировать по памяти · ${due}` : "Повторить всё по памяти"}</button>
-    <span class="hint">${due ? `${due} из ${cards} ${plural(cards, "позиции", "позиций", "позиций")} пора повторить` : `всё повторено, ${cards} ${plural(cards, "позиция", "позиции", "позиций")}`}</span></div>`;
+  const title = due ? `${due} из ${cards} ${plural(cards, "позиции", "позиций", "позиций")} пора повторить` : `всё повторено, ${cards} ${plural(cards, "позиция", "позиции", "позиций")}`;
+  return `<button type="button" class="btn big${due ? " primary" : ""}" id="${id}" data-practice="${due ? "" : "1"}" title="${title}">${due ? `Повторить по памяти · ${due}` : "Повторить всё по памяти"}</button>`;
 }
 
+const sideOf = () => scene()?.rep || rep.color || "white";
+
 function repTocHtml() {
-  const row = (s) => `<button type="button" class="rep-row${s.status === "retired" ? " retired" : ""}" data-sec="${esc(s.id)}" style="--d:${repDepth(s)}">
-      <span class="rn">${esc(s.name)}</span><span class="rp">${repLineHtml(repWay(repTree(s.color), s.node), { side: s.color }) || esc(s.path)}</span>${repScoreHtml(s)}${s.lessons?.length ? `<span class="rl">${s.lessons.length} ${plural(s.lessons.length, "урок", "урока", "уроков")}</span>` : ""}</button>`;
-  const group = (color) => {
-    const list = rep.data.sections.filter((s) => s.color === color && s.status !== "retired");
-    return `<section class="rep-group"><h2>${REP_SIDE[color]}</h2>${list.map(row).join("") || `<p class="hint">Разделов пока нет.</p>`}</section>`;
+  const color = sideOf();
+  const row = (s) => {
+    const due = drillDueIn({ section: s.id });
+    return `<button type="button" class="rep-row${s.status === "retired" ? " retired" : ""}" data-sec="${esc(s.id)}" style="--d:${repDepth(s)}">
+      <span class="rn">${esc(s.name)}</span>${due ? `<span class="badge" title="Позиций пора повторить">${due}</span>` : "<span></span>"}${repScoreHtml(s)}</button>`;
   };
-  const retired = rep.data.sections.filter((s) => s.status === "retired");
+  const list = rep.data.sections.filter((s) => s.color === color && s.status !== "retired");
+  const retired = rep.data.sections.filter((s) => s.color === color && s.status === "retired");
+  const seg = `<div class="seg wide" role="tablist" aria-label="Сторона">${["white", "black"].map((c) => {
+    const due = drillDueIn({ color: c });
+    return `<button type="button" role="tab" data-rep-color="${c}" class="${c === color ? "on" : ""}" aria-selected="${c === color}">${REP_SIDE[c]}${due ? `<span class="badge">${due}</span>` : ""}</button>`;
+  }).join("")}</div>`;
   const sc = scene();
   const way = sc?.rep && study.node !== "root" ? pathTo(sc, study.node) : [];
-  const boardLine = `<div class="rep-board"><span class="bt-label">Доска:</span>
-      ${["white", "black"].map((c) => `<button type="button" class="btab${sc?.rep === c ? " on" : ""}" data-rep-color="${c}">${REP_SIDE[c]}</button>`).join("")}
-      ${repTrial() ? "" : way.length ? `<span class="rep-path">${way.map((n, i) => inlineMove(n, study.node, i === 0)).join("")}</span><button type="button" class="btn small" id="rep-here">Сделать разделом</button>`
-        : `<span class="hint">сделай ходы на доске — пробный вариант можно записать в репертуар или сделать разделом</span>`}</div>`;
-  return `<h1 class="title">Мой репертуар</h1>
-    <p class="hint">Дебюты, которые ты играешь, по разделам. Процент — сколько очков ты набрал в партиях раздела, рядом — сколько было партий. Выбери раздел, чтобы изучать его с Claude.</p>
-    ${group("white")}${group("black")}
-    ${retired.length ? `<details class="rep-group"><summary>Не играю · ${retired.length}</summary>${retired.map(row).join("")}</details>` : ""}
+  const here = !repTrial() && way.length ? `<div class="rep-board"><span class="rep-path">${way.map((n, i) => inlineMove(n, study.node, i === 0)).join("")}</span>
+      <button type="button" class="btn small" id="rep-here">Сделать разделом</button></div>` : "";
+  return `<div class="p-head"><div class="p-title"><h1 class="title">Мой репертуар ${helpBtn("toc")}</h1></div>${dotsBtn("rep-toc-menu", "Новый дебют, обновить из партий")}</div>
+    ${helpText("toc", `Дебюты, которые ты играешь, по разделам. Процент — сколько очков ты набрал в партиях раздела, рядом — сколько было партий; синее число — сколько позиций пора повторить по памяти.
+      Сделай ходы на доске — получится пробный вариант: его можно записать в репертуар или сделать разделом.`)}
     ${repDrillButton({}, "drill-all")}
-    <div class="rep-actions"><button type="button" class="btn small" id="rep-new">＋ Новый дебют</button>
-      <button type="button" class="btn small" id="rep-seed" title="Добавить разделы для дебютов, которые встретились в новых партиях">Обновить из партий</button></div>
+    ${seg}
     ${rep.form ? repFormHtml() : ""}
-    ${cevalHtml()}${boardLine}${repTrialHtml(true)}`;
+    <div class="rep-list">${list.map(row).join("") || `<p class="hint">Разделов пока нет.</p>`}</div>
+    ${retired.length ? `<details class="rep-group"><summary>Не играю · ${retired.length}</summary>${retired.map(row).join("")}</details>` : ""}
+    ${cevalHtml()}${here}${repTrialHtml(true)}`;
 }
 
 function repFormHtml() {
   return `<form class="rep-form" id="rep-form">
-      <div class="rep-seg"><label><input type="radio" name="rep-color" value="white" checked> за белых</label>
-        <label><input type="radio" name="rep-color" value="black"> за чёрных</label></div>
+      <div class="rep-seg"><label><input type="radio" name="rep-color" value="white"${sideOf() === "white" ? " checked" : ""}> за белых</label>
+        <label><input type="radio" name="rep-color" value="black"${sideOf() === "black" ? " checked" : ""}> за чёрных</label></div>
       <input id="rep-moves" placeholder="Ходы от начала: 1.e4 c6" autocomplete="off">
       <input id="rep-name" placeholder="Название — можно не писать, возьмётся по ходам" autocomplete="off">
-      <div class="actions"><button class="btn small primary" type="submit">Добавить</button><button class="btn small" type="button" id="rep-form-cancel">Отмена</button></div>
-      <p class="hint">Или сделай ходы на доске и нажми «Сделать разделом», а можно просто попросить Claude в чате.</p></form>`;
+      <div class="actions"><button class="btn primary" type="submit">Добавить</button><button class="btn quiet" type="button" id="rep-form-cancel">Отмена</button></div></form>`;
+}
+
+// labels on the section's tree: the sections inside it, and where the user's games went past the preparation
+function repTreeTags(s) {
+  const tags = new Map();
+  const add = (id, html) => tags.set(id, (tags.get(id) || "") + html);
+  for (const x of rep.data.sections) {
+    if (x.color !== s.color || x.id === s.id || x.status === "retired") continue;
+    const cls = x.score >= 60 ? " good" : x.score < 40 ? " bad" : "";
+    add(x.node, `<button type="button" class="seclabel" data-sec="${esc(x.id)}" title="Открыть раздел «${esc(x.name)}»">${esc(x.name)}${x.games ? ` · <b class="sc${cls}">${x.score}%</b>` : ""}</button>`);
+  }
+  const d = rep.games?.section === s.id ? rep.games.data : null;
+  for (const x of d?.end || []) {
+    add(x.node, `<button type="button" class="hole" data-rep-tab="games" title="Здесь кончается твоя подготовка: ${rgGames(x.games)} шли дальше без дерева">нет подготовки · ${x.games}</button>`);
+  }
+  for (const x of d?.opponent || []) {
+    add(x.node, `<button type="button" class="hole" data-rep-tab="games" title="Соперники играли здесь ${esc(x.num + x.played)}, а в дереве ответа нет">соперник: ${esc(x.num + x.played)} · ${x.games}</button>`);
+  }
+  return tags;
 }
 
 function repSectionHtml(s) {
@@ -3690,49 +3800,65 @@ function repSectionHtml(s) {
   const onTree = !!sc?.rep;
   const node = tree ? tindex(tree).get(s.node)?.n : null;
   const parent = repSec(s.parent);
-  const kids = rep.data.sections.filter((x) => x.parent === s.id);
   const lessons = lessonsOf(s.id);
   const inLesson = lessonSection(ch.cur) === s.id;
+  if (rep.games?.section !== s.id) repLoadGames(s.id); // the labels on the tree and the «Партии» tab
+  const games = rep.games?.data;
   const way = onTree && node ? pathTo(tree, node.id).map((n, i) => inlineMove(n, study.node, i === 0)).join("") : repLineHtml(repWay(tree, s.node), { side: s.color }) || esc(s.path);
-  const crumbs = `<div class="rep-crumbs"><button type="button" class="link-btn" data-rep-toc>← Оглавление</button>
+  const crumbs = `<div class="rep-crumbs"><button type="button" class="link-btn" data-rep-toc>‹ Мой репертуар</button><span>·</span>
       <span>${REP_SIDE[s.color]}${parent ? ` › <button type="button" class="link-btn" data-sec="${esc(parent.id)}">${esc(parent.name)}</button>` : ""}</span></div>`;
   const title = rep.rename
     ? `<form id="rep-rename" class="newpos"><input id="rep-rename-input" value="${esc(s.name)}" autocomplete="off"><button class="btn small primary" type="submit">Сохранить</button></form>`
     : `<h1 class="title">${esc(s.name)}${s.status === "retired" ? ` <span class="rtag">не играю</span>` : ""}</h1>`;
-  // a lesson's × deletes it (its chat) on a second click; its boards stay in «Разбор», the notes keep what it taught
-  const lessonChips = lessons.map((c, i) => `<span class="rchip-wrap${c.id === ch.cur ? " on" : ""}"><button type="button" class="rchip${c.id === ch.cur ? " on" : ""}" data-lesson="${esc(c.id)}" title="${esc(c.title)}">${c.busy ? '<span class="dot"></span>' : ""}${esc(c.title === "Новый чат" ? `Урок ${lessons.length - i}` : c.title)}</button><button type="button" class="rchip-x${rep.delLesson === c.id ? " confirm" : ""}" data-lesson-del="${esc(c.id)}" title="Удалить урок">${rep.delLesson === c.id ? "удалить?" : "×"}</button></span>`).join("");
-  const head = `${crumbs}${title}
-    <div class="rep-meta"><span class="rep-path">${way}</span>${repScoreHtml(s)}</div>
-    ${kids.length ? `<div class="rep-chips"><span class="bt-label">Внутри:</span>${kids.map((k) => `<button type="button" class="rchip" data-sec="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div>` : ""}
-    <div class="rep-chips"><span class="bt-label">Уроки:</span>${lessonChips}<button type="button" class="rchip add" id="rep-lesson-new">＋ Новый урок</button></div>
-    ${repDrillButton({ section: s.id }, "drill-sec")}
-    ${repGameButton()}
-    ${repPuzzleButtons(s)}
-    ${repGamesHtml(s)}
-    <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."} Увидеть его — попроси в чате «покажи конспект».</p>`;
-  const boards = inLesson ? boardsOf(ch.cur) : [];
-  const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски раздела"><button type="button" class="btab${onTree ? " on" : ""}" data-rep-tree>Дерево репертуара</button>
-      ${boards.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
-      ${inLesson ? `<button type="button" class="btab add" id="board-add" title="Ещё одна доска этого урока: начальная позиция, FEN или ходы">＋ доска</button>` : ""}</div>
-    <form class="newpos" id="newpos-form"${study.newpos && inLesson ? "" : " hidden"}><input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
-  let body = "";
-  if (onTree && node) {
-    body = `${cevalHtml()}${node.comment ? `<div class="rich lead">${md(node.comment)}</div>` : ""}
-      ${repTrialHtml(false)}
-      ${boardTreeHtml(node) || `<p class="hint">После этой позиции ходов пока нет. Сделай ходы на доске и нажми «Записать в репертуар» — или начни урок: Claude разберёт раздел и запишет ходы, которые ты выберешь.</p>`}`;
-  } else if (sc) {
-    body = `<h2 class="rep-sub">${esc(sc.title)}</h2>${cevalHtml()}${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
-      ${boardTreeHtml(sc.root) || `<p class="hint">Ходов пока нет.</p>`}`;
+  const head = `<div class="p-head"><div class="p-title">${crumbs}${title}<div class="rep-meta"><span class="rep-path">${way}</span>${repScoreHtml(s)}</div></div>
+    ${dotsBtn("rep-sec-menu", "Переименовать, конспект, не играю, удалить")}</div>`;
+  const acts = `<div class="acts">
+      <button type="button" class="act" id="rep-lesson-go">${ICON.spark}<span>Урок с Claude</span><small>${lessons.length ? `${lessons.length} ${plural(lessons.length, "урок", "урока", "уроков")}` : "начать первый"}</small></button>
+      <button type="button" class="act" id="rep-play-menu">${ICON.play}<span>Сыграть</span><small>соперник ≈${repElo()}</small></button>
+      <button type="button" class="act" id="rep-puz-menu">${ICON.target}<span>Задачи</span><small>${s.puzzles ? `${s.puzzles} из партий` : "Lichess"}</small></button></div>`;
+  const tab = rep.tab || "tree";
+  const nGames = games?.games ?? s.games ?? 0;
+  const tabs = `<div class="tabs" role="tablist">${[["tree", "Дерево", ""], ["games", "Партии", nGames || ""], ["lessons", "Уроки", lessons.length || ""]]
+    .map(([k, l, n]) => `<button type="button" class="tab${tab === k ? " on" : ""}" role="tab" aria-selected="${tab === k}" data-rep-tab="${k}">${l}${n !== "" ? ` <span class="n">${n}</span>` : ""}</button>`).join("")}
+    <span class="grow"></span>${tab === "tree" ? helpBtn("tree") : tab === "games" ? helpBtn("games") : ""}</div>`;
+  let body;
+  if (tab === "games") body = repGamesHtml(s);
+  else if (tab === "lessons") body = repLessonsHtml(s, lessons);
+  else {
+    const boards = inLesson ? boardsOf(ch.cur) : [];
+    const btabs = !inLesson && !boards.length ? "" : `<div class="board-tabs" role="tablist" aria-label="Доски раздела"><button type="button" class="btab${onTree ? " on" : ""}" data-rep-tree>Дерево репертуара</button>
+        ${boards.map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
+        ${inLesson ? `<button type="button" class="btab add" id="board-add" title="Ещё одна доска этого урока: начальная позиция, FEN или ходы">＋ доска</button>` : ""}</div>
+      <form class="newpos" id="newpos-form"${study.newpos && inLesson ? "" : " hidden"}><input id="newpos-input" placeholder="FEN или ходы: 1.e4 e5 2.Nf3" autocomplete="off"><button class="btn small primary" type="submit">Создать</button></form>`;
+    const help = helpText("tree", `Дерево — ходы, которые ты решил играть. Ход на доске сначала пробный: в дерево он попадёт кнопкой «Записать в репертуар».
+      Меню хода — правый клик, долгое нажатие или ⋯ на текущем ходе: сделать главным, сделать разделом, удалить.
+      <span class="user">Жёлтые</span> ходы сделаны тобой на доске, белые — записаны Claude или взяты из твоих партий.
+      Метки на ходах — разделы внутри этого и места, где твои партии ушли дальше подготовки.`);
+    let main = "";
+    if (onTree && node) {
+      const tags = repTreeTags(s);
+      const rootTags = tags.get(node.id) || "";
+      main = `${cevalHtml()}${node.comment ? `<div class="rich lead">${md(node.comment)}</div>` : ""}
+        ${repTrialHtml(false)}${rootTags ? `<div class="tags">${rootTags}</div>` : ""}
+        ${boardTreeHtml(node, undefined, tags) || `<p class="hint">Ходов пока нет. Сыграй ход на доске или начни урок с Claude.</p>`}`;
+    } else if (sc) {
+      main = `<h2 class="rep-sub">${esc(sc.title)}</h2>${cevalHtml()}${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
+        ${boardTreeHtml(sc.root) || `<p class="hint">Ходов пока нет.</p>`}`;
+    }
+    body = help + btabs + main;
   }
-  const foot = `<div class="rep-actions">
-      <button type="button" class="link-btn" id="rep-rename-btn">переименовать</button>
-      <button type="button" class="link-btn" id="rep-retire">${s.status === "retired" ? "снова играю" : "больше не играю"}</button>
-      <button type="button" class="link-btn${rep.del ? " confirm" : ""}" id="rep-del">${rep.del ? "точно удалить раздел?" : "удалить раздел"}</button></div>
-    <div class="legend">
-      <div>Дерево — ходы, которые ты решил играть. Ход на доске сначала пробный: в дерево он попадёт кнопкой «Записать в репертуар». Правый клик по ходу дерева — сделать главным, удалить, сделать разделом.</div>
-      <div><span class="user">ход</span> — сделан тобой на доске, <b>ход</b> — записан Claude или взят из твоих партий.</div>
-    </div>`;
-  return head + tabs + body + foot;
+  return head + repDrillButton({ section: s.id }, "drill-sec") + acts + tabs + body;
+}
+
+// «Уроки» of a section: its chats with Claude, newest first; × deletes one (asks again), its boards stay in «Разбор»
+function repLessonsHtml(s, lessons) {
+  const rows = lessons.map((c, i) => `<div class="lesson-row${c.id === ch.cur ? " on" : ""}">
+      <button type="button" class="lesson-open" data-lesson="${esc(c.id)}" title="${esc(c.title)}">${c.busy ? '<span class="dot"></span>' : ""}<span class="ln-title">${esc(c.title === "Новый чат" ? `Урок ${lessons.length - i}` : c.title)}</span><span class="ln-date">${c.updated ? repAgo(c.updated) : ""}</span></button>
+      <button type="button" class="lesson-del${rep.delLesson === c.id ? " confirm" : ""}" data-lesson-del="${esc(c.id)}" title="Удалить урок" aria-label="Удалить урок">${rep.delLesson === c.id ? "Удалить?" : "×"}</button></div>`).join("");
+  return `<div class="lesson-list">${rows || `<p class="hint">Уроков пока нет.</p>`}</div>
+    <div class="row"><button type="button" class="btn" id="rep-lesson-new">＋ Новый урок</button></div>
+    <p class="hint">${s.notes_at ? `Claude ведёт конспект раздела, обновлён ${repAgo(s.notes_at)}.` : "Конспект раздела Claude начнёт на первом уроке."}
+      ${s.notes_at ? `<button type="button" class="link-btn" id="rep-notes">Показать конспект</button>` : ""}</p>`;
 }
 
 function repChatEmptyHtml() {
@@ -3788,10 +3914,10 @@ function repTrialHtml(toc) {
   if (!tr) return "";
   const way = repWay(scene(), tr.base.id);
   const moves = repLineHtml([...way, ...tr.plies.map((p) => p.uci)], { from: way.length, side: scene()?.rep });
-  return `<div class="rep-trial"><div><b>Пробный вариант</b> — ещё не в репертуаре: <span class="rep-path">${moves}</span></div>
-    <div class="actions">${toc ? `<button type="button" class="btn small primary" id="rep-trial-section">Сделать разделом</button>` : ""}
-      <button type="button" class="btn small${toc ? "" : " primary"}" id="rep-trial-save">Записать в репертуар</button>
-      <button type="button" class="btn small" id="rep-trial-drop">Убрать</button><span class="hint">← — ход назад</span></div></div>`;
+  return `<div class="rep-trial"><div class="rep-trial-head">Пробный вариант — ещё не в репертуаре</div><div class="rep-path">${moves}</div>
+    <div class="actions">${toc ? `<button type="button" class="btn primary" id="rep-trial-section">Сделать разделом</button>` : ""}
+      <button type="button" class="btn${toc ? "" : " primary"}" id="rep-trial-save">Записать в репертуар</button>
+      <button type="button" class="btn quiet" id="rep-trial-drop">Убрать</button></div></div>`;
 }
 
 async function repTrialSave(asSection) {
@@ -3853,7 +3979,7 @@ function drillRoots(scope) {
     const skip = new Set(retired.filter((r) => r.color === s.color && r.id !== s.id && !onWay.has(r.node)).map((r) => r.node));
     return [{ color: s.color, tree, start: tree.root, way, skip }];
   }
-  return ["white", "black"].map((c) => repTree(c)).filter(Boolean)
+  return ["white", "black"].filter((c) => !scope.color || c === scope.color).map((c) => repTree(c)).filter(Boolean)
     .map((tree) => ({ color: tree.rep, tree, start: tree.root, way: null, skip: new Set(retired.filter((r) => r.color === tree.rep).map((r) => r.node)) }));
 }
 const drillCount = (scope, pred) => drillRoots(scope).reduce((n, r) => n + drillWalk(r.color, r.start, r.skip, r.way, pred), 0);
@@ -4010,17 +4136,21 @@ function repDrillBoard() {
 function repDrillHtml() {
   const d = rep.drill;
   const s = d.scope.section ? repSec(d.scope.section) : null;
-  const head = `<div class="rep-crumbs"><button type="button" class="link-btn" id="drill-stop">← Закончить тренировку</button></div>
-    <h1 class="title">Тренировка: ${esc(s ? s.name : "весь репертуар")}</h1>
-    <div class="drill-stats"><span>верно <b>${d.ok}</b></span><span>ошибок <b>${d.fail}</b></span><span>осталось <b>${drillDueIn(d.scope)}</b></span>${d.practice ? `<span class="rtag">повтор всего</span>` : ""}</div>`;
+  const left = d.over ? 0 : drillDueIn(d.scope);
+  const done = d.ok + d.fail;
+  const head = `<div class="p-head"><div class="p-title"><div class="rep-crumbs"><button type="button" class="link-btn" id="drill-stop">‹ Закончить</button></div>
+      <h1 class="title">Повторение · ${esc(s ? s.name : "весь репертуар")} ${helpBtn("drill")}</h1></div></div>
+    ${helpText("drill", "Программа ходит за соперника по дереву репертуара, а ты по памяти отвечаешь там, где пора повторить; ходы, которые ты уже помнишь, она делает сама. Верный ответ вернёт позицию через день, потом всё реже; ошибка — через 10 минут и ещё раз в этой тренировке.")}
+    <div class="prog" role="progressbar" aria-valuenow="${done}" aria-valuemax="${done + left}"><i style="width:${done + left ? Math.round((100 * done) / (done + left)) : 100}%"></i></div>
+    <div class="drill-stats"><span>верно <b>${d.ok}</b></span><span>ошибок <b>${d.fail}</b></span><span>осталось <b>${left}</b></span>${d.practice ? `<span class="rtag">повтор всего</span>` : ""}</div>`;
   if (d.over) {
     const cards = drillCardsIn(d.scope);
     const next = drillNextDue(d.scope);
     const text = !cards ? "Здесь пока нечего тренировать: в дереве нет твоих ходов. Добавь их на уроке с Claude или кнопкой «Записать в репертуар»."
       : `${d.ok + d.fail ? `Готово: верно ${d.ok}, ошибок ${d.fail}.` : "Сейчас повторять нечего."}${next ? ` Следующее повторение — ${repIn(next)}.` : ""}`;
     return `${head}<div class="drill-box ok">${text}</div>
-      <div class="rep-actions">${cards ? `<button type="button" class="btn small" id="drill-again">Повторить всё ещё раз</button>` : ""}
-        <button type="button" class="btn small" id="drill-stop2">${s ? "К разделу" : "К оглавлению"}</button></div>`;
+      <div class="rep-actions"><button type="button" class="btn primary" id="drill-stop2">${s ? "К разделу" : "К оглавлению"}</button>
+        ${cards ? `<button type="button" class="btn" id="drill-again">Повторить всё ещё раз</button>` : ""}</div>`;
   }
   const L = d.line;
   const tree = drillTree();
@@ -4034,13 +4164,12 @@ function repDrillHtml() {
     const want = drillAnswer(node, L.way);
     box = `<div class="drill-box bad"><div>${L.hinted ? "Подсказка" : "Не так"}: в репертуаре здесь <b>${esc(want.num.endsWith(".") ? want.num : want.num.replace("…", "..."))}${esc(want.san)}</b> — сыграй его. Эту позицию спрошу ещё раз.</div>
       ${want.comment ? `<div class="rich">${md(want.comment)}</div>` : ""}
-      <div class="actions"><button type="button" class="link-btn" id="drill-why">Спросить Claude, почему так</button></div></div>`;
+      <div class="actions"><button type="button" class="btn" id="drill-why">${ICON.spark}Почему так?</button></div></div>`;
   } else {
     box = `<div class="drill-box"><div>${L.alt ? `${esc(L.alt)} — твой запасной ход. А какой здесь главный?` : `Твой ход за ${L.color === "white" ? "белых" : "чёрных"}. Что ты здесь играешь?`}</div>
-      <div class="actions"><button type="button" class="btn small" id="drill-hint">Подсказка</button></div></div>`;
+      <div class="actions"><button type="button" class="btn" id="drill-hint">Подсказка</button></div></div>`;
   }
-  return `${head}${box}<div class="rep-path drill-line">${line || "начальная позиция"}</div>
-    <p class="hint">Программа ходит за соперника по дереву репертуара, а ты по памяти отвечаешь там, где пора повторить; ходы, которые ты уже помнишь, она делает сама. Верный ответ вернёт позицию через день, потом всё реже; ошибка — через 10 минут и ещё раз в этой тренировке.</p>`;
+  return `${head}${box}<div class="rep-path drill-line">${line || "начальная позиция"}</div>`;
 }
 
 // ---- the user's games against the tree (coach/repertoire.py check_game): where they or the opponent left it ----
@@ -4067,7 +4196,7 @@ function repGamesHtml(s) {
   if (rep.games?.section !== s.id) repLoadGames(s.id);
   const d = rep.games?.data;
   if (!d) return rep.games?.error ? `<p class="hint">Партии не сверились: ${esc(rep.games.error)}</p>` : `<p class="hint">Сверяю твои партии с деревом…</p>`;
-  if (!d.games) return "";
+  if (!d.games) return `<p class="hint">Партий в этом дебюте пока нет.</p>`;
   const c = d.counts || {};
   const tree = repTree(s.color);
   const row = (x, kind, i) => {
@@ -4076,18 +4205,18 @@ function repGamesHtml(s) {
     const want = tree && tindex(tree).get(x.node)?.n.children.find((c) => c.san === x.expected?.[0]);
     const exp = (kind === "user" || kind === "habit") && want ? ` <span class="rg-exp">вместо ${repLineHtml([...way, want.uci], { from: way.length, side: s.color })}</span>` : "";
     return `<div class="rg-row ${kind}"><span class="rep-path">${move}${exp}</span><span class="rg-n">${rgGames(x.games)}</span>
-      <span class="rg-act"><button type="button" class="link-btn" data-rg-goto="${esc(x.node)}">показать</button>${kind === "opponent"
-        ? `<button type="button" class="link-btn" data-rg-add="${i}">добавить в дерево</button>` : ""}<button type="button" class="link-btn" data-rg-ask="${kind}" data-i="${i}">спросить Claude</button></span></div>`;
+      <span class="rg-act"><button type="button" class="btn small" data-rg-goto="${esc(x.node)}">Показать</button>${kind === "opponent"
+        ? `<button type="button" class="btn small" data-rg-add="${i}">В дерево</button>` : ""}<button type="button" class="btn small quiet" data-rg-ask="${kind}" data-i="${i}">${ICON.spark}Спросить</button></span></div>`;
   };
   const group = (kind, title) => (d[kind]?.length ? `<h3>${title}</h3>${d[kind].map((x, i) => row(x, kind, i)).join("")}` : "");
   const recent = d.recent.map((g, i) => `<button type="button" class="rg-game" data-rg-game="${i}" title="Показать партию на доске">
       <span>${new Date(g.date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })} · ${esc(g.opp)}${g.oppRating ? ` (${g.oppRating})` : ""}</span>
       <span class="res ${g.outcome}">${RG_RESULT[g.outcome] || ""}</span><span class="rg-chk ${g.check.kind === "user" && !g.check.learned ? "habit" : g.check.kind}">${esc(rgCheckText(g.check))}</span></button>`).join("");
-  return `<details class="rep-games"${rep.gamesOpen ? " open" : ""}><summary>Партии в этом дебюте: ${d.games} · ты уходил из дерева ${c.user || 0} · соперник ${c.opponent || 0}</summary>
-    <p class="hint">Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход считается ошибкой, только если партия сыграна после того, как ход записан в дерево; более ранние партии — «раньше играл иначе». Ход соперника — ответ, который стоит подготовить.</p>
-    <p class="hint rg-legend"><span class="k tree">синие</span> — ходы из твоего дерева; подчёркнут ход не по дереву: <span class="k user">красный</span> — ты ушёл, уже зная ход, <span class="k habit">серый</span> — раньше играл иначе, <span class="k opp">жёлтый</span> — ход соперника, которого в дереве нет. Наведи на ход — покажу позицию.</p>
+  return `${helpText("games", `Партия идёт по дереву, пока кто-то не сыграет ход, которого в нём нет. Твой такой ход считается ошибкой, только если партия сыграна после того, как ход записан в дерево; более ранние партии — «раньше играл иначе». Ход соперника — ответ, который стоит подготовить.
+      <span class="rg-legend"><span class="k tree">Синие</span> — ходы из твоего дерева; подчёркнут ход не по дереву: <span class="k user">красный</span> — ты ушёл, уже зная ход, <span class="k habit">серый</span> — раньше играл иначе, <span class="k opp">жёлтый</span> — ход соперника, которого в дереве нет.</span>`)}
+    <div class="rep-games"><div class="rg-sum">${rgGames(d.games)} · ты уходил из дерева ${c.user || 0} · соперник ${c.opponent || 0}</div>
     ${group("user", "Где ты уходишь из дерева")}${group("habit", "Раньше играл иначе — до того, как ход появился в дереве")}${group("opponent", "Ходы соперников, на которые в дереве нет ответа")}${group("end", "Где кончается подготовка")}
-    <h3>Последние партии</h3><div class="rg-games">${recent}</div></details>`;
+    <h3>Последние партии</h3><div class="rg-games">${recent}</div></div>`;
 }
 
 // a finished live game said against the repertoire (asked after the game, never during it)
@@ -4127,7 +4256,6 @@ $("#panel").addEventListener("click", (e) => {
   study.node = t.dataset.node;
   setMode("rep");
 });
-$("#panel").addEventListener("toggle", (e) => { if (e.target.classList?.contains("rep-games")) rep.gamesOpen = e.target.open; }, true);
 
 async function repGamesClick(t) {
   const s = repSec();
@@ -4331,11 +4459,13 @@ function repGameHtml() {
     return `<div class="rg-row ${x.kind === "user" ? "user" : x.kind === "opp" ? "opponent" : ""}"><span>${esc(x.text)}${extra}.</span></div>`;
   }).join("");
   const actions = g.over
-    ? `<button type="button" class="btn small primary" id="game-review">Разобрать с Claude</button><button type="button" class="btn small" id="game-again">Ещё партию</button><button type="button" class="btn small" id="game-stop2">К разделу</button>`
-    : `<button type="button" class="btn small" id="game-back"${g.ucis.length ? "" : " disabled"}>Ход назад</button><button type="button" class="btn small" id="game-resign">Сдаться</button>`;
-  return `<div class="rep-crumbs"><button type="button" class="link-btn" id="game-stop">← Закончить партию</button></div>
-    <h1 class="title">Партия с движком: ${esc(s?.name || "")}</h1>
-    <p class="hint">Ты играешь ${g.color === "white" ? "белыми" : "чёрными"}. Соперник ходит по твоему дереву${g.plan ? " и по варианту, который выбрал Claude" : ""}, потом — Stockfish ≈${g.elo}.${inBook ? ` По дереву сыграно ${inBook} ${plural(inBook, "полуход", "полухода", "полуходов")}.` : ""}</p>
+    ? `<button type="button" class="btn primary" id="game-review">${ICON.spark}Разобрать с Claude</button><button type="button" class="btn" id="game-again">Ещё партию</button><button type="button" class="btn quiet" id="game-stop2">К разделу</button>`
+    : `<button type="button" class="btn" id="game-back"${g.ucis.length ? "" : " disabled"}>Ход назад</button><span class="grow"></span>
+       <button type="button" class="btn quiet${rep.resignAsk ? " danger" : ""}" id="game-resign">${rep.resignAsk ? "Точно сдаться?" : "Сдаться"}</button>`;
+  return `<div class="p-head"><div class="p-title"><div class="rep-crumbs"><button type="button" class="link-btn" id="game-stop">‹ Закончить партию</button></div>
+      <h1 class="title">Партия с движком ${helpBtn("game")}</h1>
+      <div class="rep-meta">${esc(s?.name || "")} · ты ${g.color === "white" ? "белыми" : "чёрными"} · соперник ≈${g.elo}</div></div></div>
+    ${helpText("game", `Соперник ходит по твоему дереву${g.plan ? " и по варианту, который выбрал Claude" : ""}, потом — Stockfish ≈${g.elo}. Подсказок движка во время партии нет.${inBook ? ` По дереву сыграно ${inBook} ${plural(inBook, "полуход", "полухода", "полуходов")}.` : ""}`)}
     ${g.comment ? `<div class="rep-trial"><div><b>Claude:</b> ${esc(g.comment)}</div></div>` : ""}
     ${status}
     <div class="rep-path drill-line">${repLineHtml(g.ucis, { side: g.color }) || "начальная позиция"}</div>
@@ -4386,7 +4516,7 @@ function repEnter() {
 function repOpen(sid) {
   const s = repSec(sid);
   if (!s) return;
-  Object.assign(rep, { section: sid, color: s.color, rename: false, del: false, form: false });
+  Object.assign(rep, { section: sid, color: s.color, rename: false, del: false, form: false, tab: rep.section === sid ? rep.tab : "tree" });
   study.newpos = false;
   repRemember();
   closePreviewSilently();
@@ -4495,7 +4625,7 @@ function onRepScene(ev) {
 
 $("#panel").addEventListener("click", async (e) => {
   if (!rep.on || mode !== "study") return;
-  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], #rep-new, #rep-seed, #rep-form-cancel, #rep-lesson-new, #rep-rename-btn, #rep-retire, #rep-del, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del], #game-start, #game-stop, #game-stop2, #game-back, #game-resign, #game-review, #game-again, #puz-own, #puz-lichess");
+  const t = e.target.closest("[data-sec], [data-rep-toc], [data-lesson], [data-rep-tree], [data-rep-color], [data-rep-tab], #rep-form-cancel, #rep-lesson-new, #rep-lesson-go, #rep-notes, #rep-here, #rep-trial-save, #rep-trial-section, #rep-trial-drop, #drill-sec, #drill-all, #drill-again, #drill-stop, #drill-stop2, #drill-hint, #drill-why, [data-rg-goto], [data-rg-add], [data-rg-ask], [data-rg-game], [data-lesson-del], #game-stop, #game-stop2, #game-back, #game-resign, #game-review, #game-again, #rep-toc-menu, #rep-sec-menu, #rep-play-menu, #rep-puz-menu");
   if (!t) return;
   if (t.dataset.sec && e.target.closest(".mvl")) e.stopPropagation(); // the row opens its section; its moves only show on hover
   const s = repSec();
@@ -4504,13 +4634,38 @@ $("#panel").addEventListener("click", async (e) => {
     else if (t.dataset.repToc !== undefined) repToc();
     else if (t.dataset.lesson) openChat(t.dataset.lesson);
     else if (t.dataset.lessonDel) await repDeleteLesson(t.dataset.lessonDel);
-    else if (t.id === "game-start" && s) gameStart(s.id);
-    else if (t.id === "puz-own" && s) await repOwnPuzzles(s);
-    else if (t.id === "puz-lichess" && s) await repLichessPuzzles(s);
+    else if (t.dataset.repTab) { rep.tab = t.dataset.repTab; renderStudyPanel(); }
+    else if (t.id === "rep-toc-menu") repTocMenu(t);
+    else if (t.id === "rep-sec-menu" && s) repSectionMenu(t, s);
+    else if (t.id === "rep-play-menu" && s) {
+      openMenu(t, repPlayMenu(s), (act) => {
+        if (act.startsWith("elo:")) {
+          try { localStorage.setItem("rep.elo", act.slice(4)); } catch {}
+          setMenu(repPlayMenu(s));
+          renderStudyPanel();
+          return true;
+        }
+        if (act === "start") gameStart(s.id);
+        return false;
+      });
+    } else if (t.id === "rep-puz-menu" && s) {
+      openMenu(t, repPuzzleMenu(s), async (act) => { if (act === "own") await repOwnPuzzles(s); else if (act === "lichess") await repLichessPuzzles(s); });
+    } else if (t.id === "rep-lesson-go" && s) { // the latest lesson of the section, or a new one
+      setChatOpen(true);
+      const l = lessonsOf(s.id)[0];
+      if (l) { if (l.id !== ch.cur) await openChat(l.id, { follow: false }); $("#chat-text").focus(); } else await newLesson();
+    } else if (t.id === "rep-notes" && s) sendToChat("Покажи конспект этого раздела.");
     else if (t.id === "game-again" && rep.game) gameStart(rep.game.section);
     else if (t.id === "game-stop" || t.id === "game-stop2") repGameStop();
     else if (t.id === "game-back") gameTakeback();
     else if (t.id === "game-resign" && rep.game && !rep.game.over) {
+      if (!rep.resignAsk) { // a second press resigns
+        rep.resignAsk = true;
+        renderStudyPanel();
+        setTimeout(() => { if (rep.resignAsk) { rep.resignAsk = false; if (rep.game) renderStudyPanel(); } }, 3000);
+        return;
+      }
+      rep.resignAsk = false;
       clearTimeout(rep.game.timer);
       rep.game.seq++;
       rep.game.thinking = false;
@@ -4528,22 +4683,9 @@ $("#panel").addEventListener("click", async (e) => {
       study.id = repTree(rep.color)?.id ?? null;
       study.node = "root";
       renderStudy();
-    } else if (t.id === "rep-new") { rep.form = !rep.form; renderStudyPanel(); $("#rep-moves")?.focus(); }
-    else if (t.id === "rep-form-cancel") { rep.form = false; renderStudyPanel(); }
-    else if (t.id === "rep-seed") {
-      const r = await post("/api/rep/seed", {});
-      setStatus(r.added ? `Новых разделов: ${r.added}` : "Новых дебютов в партиях нет");
-      setTimeout(() => setStatus(""), 2500);
-    } else if (t.id === "rep-lesson-new" && s) { setChatOpen(true); await newLesson(); }
-    else if (t.id === "rep-rename-btn") { rep.rename = true; renderStudyPanel(); $("#rep-rename-input")?.select(); }
-    else if (t.id === "rep-retire" && s) await post("/api/rep/section", { action: s.status === "retired" ? "restore" : "retire", id: s.id });
-    else if (t.id === "rep-del" && s) {
-      if (!rep.del) { rep.del = true; renderStudyPanel(); setTimeout(() => { rep.del = false; if (rep.on) renderStudyPanel(); }, 3000); return; }
-      rep.del = false;
-      await post("/api/rep/section", { action: "delete", id: s.id });
-      await repReload();
-      repToc();
-    } else if (t.id === "rep-here" && scene()?.rep) await repNewSection(scene().rep, study.node);
+    } else if (t.id === "rep-form-cancel") { rep.form = false; renderStudyPanel(); }
+    else if (t.id === "rep-lesson-new" && s) { setChatOpen(true); await newLesson(); }
+    else if (t.id === "rep-here" && scene()?.rep) await repNewSection(scene().rep, study.node);
     else if (t.id === "rep-trial-save") await repTrialSave(false);
     else if (t.id === "rep-trial-section") await repTrialSave(true);
     else if (t.id === "rep-trial-drop") { rep.trial = null; renderStudy(); }
@@ -4562,6 +4704,39 @@ $("#panel").addEventListener("click", async (e) => {
     }
   } catch (err) { setStatus(String(err.message), true); }
 });
+
+// ⋯ of the table of contents: a new opening, sections for openings met in new games
+function repTocMenu(anchor) {
+  openMenu(anchor, `<button type="button" class="mi" data-act="new">＋ Новый дебют</button>
+    <button type="button" class="mi" data-act="seed" title="Добавить разделы для дебютов, которые встретились в новых партиях">Обновить из партий</button>`, async (act) => {
+    if (act === "new") { rep.form = true; renderStudyPanel(); $("#rep-moves")?.focus(); }
+    else if (act === "seed") {
+      const r = await post("/api/rep/seed", {});
+      setStatus(r.added ? `Новых разделов: ${r.added}` : "Новых дебютов в партиях нет");
+      setTimeout(() => setStatus(""), 2500);
+    }
+  });
+}
+// ⋯ of a section: rename, Claude's notes, «не играю», delete (asks again inside the menu)
+function repSectionMenu(anchor, s) {
+  const items = () => `<button type="button" class="mi" data-act="rename">Переименовать</button>
+    <button type="button" class="mi" data-act="notes">${ICON.spark}Показать конспект Claude</button>
+    <button type="button" class="mi" data-act="retire">${s.status === "retired" ? "Снова играю" : "Больше не играю"}</button>
+    <div class="menu-sep"></div>
+    <button type="button" class="mi danger" data-act="del">Удалить раздел…</button>`;
+  openMenu(anchor, items(), async (act) => {
+    if (act === "rename") { rep.rename = true; renderStudyPanel(); $("#rep-rename-input")?.select(); }
+    else if (act === "notes") sendToChat("Покажи конспект этого раздела.");
+    else if (act === "retire") await post("/api/rep/section", { action: s.status === "retired" ? "restore" : "retire", id: s.id });
+    else if (act === "del") { setMenu(confirmHtml(`Удалить раздел «${esc(s.name)}»?`, "Ходы останутся в дереве, уроки — в чатах.", "del-yes", "Удалить")); return true; }
+    else if (act === "cancel") { setMenu(items()); return true; }
+    else if (act === "del-yes") {
+      await post("/api/rep/section", { action: "delete", id: s.id });
+      await repReload();
+      repToc();
+    }
+  });
+}
 
 $("#panel").addEventListener("submit", async (e) => {
   if (!rep.on || (e.target.id !== "rep-form" && e.target.id !== "rep-rename")) return;
@@ -4592,10 +4767,7 @@ $("#panel").addEventListener("click", (e) => {
     if (!pz.cur || pz.st?.result) nextPuzzle(); else renderPuzzlePanel();
   } else setMode("rep");
 });
-$("#panel").addEventListener("change", (e) => {
-  if (e.target.id !== "game-elo") return;
-  try { localStorage.setItem("rep.elo", e.target.value); } catch {}
-});
+
 
 // =====================================================================
 // modes, keys, server events
@@ -4673,6 +4845,7 @@ document.addEventListener("keydown", (e) => {
     $("#ctx").hidden = true;
     $("#jobs-pop").hidden = $("#chats-pop").hidden = $("#app-menu").hidden = $("#model-pop").hidden = true;
     if (drawMode) setDrawMode(false);
+    closeMenu();
     if (preview) { closePreview(); return; }
   }
   if (e.target.closest("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey) return;
