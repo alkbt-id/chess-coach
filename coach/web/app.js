@@ -3111,11 +3111,12 @@ function renderAppMenu() {
   const menu = $("#app-menu");
   if (menu.hidden) return;
   const run = jobsState.list.some((j) => j.status === "running");
-  const kinds = Object.entries(jobsState.kinds).sort(([a], [b]) => (b === "update") - (a === "update"));
+  const kinds = ["update", "report"].filter((k) => jobsState.kinds[k]);
   menu.innerHTML = `<div class="menu-head">Мои партии</div>
-    ${kinds.map(([k, t]) => `<button type="button" class="mi" data-job="${k}"${run ? " disabled" : ""}>${esc(t)}</button>`).join("")}
+    ${kinds.map((k) => `<button type="button" class="mi" data-job="${k}"${run ? " disabled" : ""}>${esc(jobsState.kinds[k])}</button>`).join("")}
+    <button type="button" class="mi" data-joblog="1"${jobsState.list.length ? "" : " disabled"}>Журнал обработки</button>
     <div class="menu-sep"></div>
-    <button type="button" class="mi" data-joblog="1"${jobsState.list.length ? "" : " disabled"}>Журнал обработки</button>`;
+    <button type="button" class="mi" data-settings="1">Настройки…<span class="k">⌘,</span></button>`;
   const r = $("#app-menu-btn").getBoundingClientRect();
   menu.style.top = `${r.bottom + 6}px`;
   menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
@@ -3134,7 +3135,89 @@ $("#app-menu").addEventListener("click", async (e) => {
   $("#app-menu").hidden = true;
   if (b.dataset.job) await post("/api/job", { kind: b.dataset.job }).catch((err) => setStatus(String(err.message), true));
   else if (b.dataset.joblog) openJobsPop();
+  else if (b.dataset.settings) openSettings();
 });
+
+// ---- «Настройки»: the Lichess login (also used by «Игра» and Lichess puzzles), the jobs step by step, Claude,
+// the keys ----
+const KEYS = [["← →", "ход назад / вперёд"], ["↑ ↓", "в начало / в конец"], ["⇧↑ ⇧↓", "соседний вариант"], ["F", "перевернуть доску"],
+  ["L", "Stockfish"], ["Esc", "закрыть, вернуться"], ["Enter", "следующая задача"], ["⌘R", "обновить окно"]];
+const settings = { logout: false };
+function settingsHtml() {
+  const li = play.st;
+  const run = jobsState.list.find((j) => j.status === "running");
+  const last = run || jobsState.list[jobsState.list.length - 1];
+  const steps = ["fetch_games", "analyze", "make_puzzles", "report"].filter((k) => jobsState.kinds[k]);
+  const lichess = !li ? `<p class="hint">Связываюсь с Lichess…</p>`
+    : li.connected ? `<div class="set-row"><div class="set-l"><b>Подключено: ${esc(li.user || "?")}</b><span>${li.scopeOk ? "игра, задачи и рейтинг идут через этот аккаунт" : "без права играть партии — подключи заново"}</span></div>
+        ${li.scopeOk ? "" : loginLink("Подключить заново", "btn")}
+        <button type="button" class="btn${settings.logout ? " danger" : ""}" id="set-logout">${settings.logout ? "Точно отключить?" : "Отключить"}</button></div>`
+    : `<div class="set-row"><div class="set-l"><b>Не подключено</b><span>Задачи пойдут в рейтинг Lichess, партии — в твой аккаунт</span></div>${loginLink()}</div>`;
+  return `<div class="sheet-head"><h2>Настройки</h2><button type="button" class="ibtn" id="set-close" aria-label="Закрыть">${svg('<path d="M6 6l12 12M18 6L6 18"/>')}</button></div>
+    <div class="set-sec"><h3>Lichess</h3>${lichess}
+      ${li && !li.connected ? `<details class="token-way"><summary>Другой способ: вставить личный токен</summary>
+        <form class="newpos" id="set-token-form"><input id="set-token-input" placeholder="lip_…" autocomplete="off" spellcheck="false"><button class="btn primary" type="submit">Сохранить</button></form></details>` : ""}</div>
+    <div class="set-sec"><h3>Мои партии</h3>
+      <div class="set-row"><div class="set-l"><b>${esc(jobsState.kinds.update || "Обновить всё")}</b><span>${last ? `${esc(last.title)} — ${esc(JOB_STATUS[last.status] || last.status)}` : "ещё не запускалось"}</span></div>
+        <button type="button" class="btn primary" data-set-job="update"${run ? " disabled" : ""}>Обновить</button></div>
+      <div class="set-row"><div class="set-l"><b>По шагам</b><span>каждый шаг отдельно</span></div>
+        <div class="row">${steps.map((k) => `<button type="button" class="chip" data-set-job="${k}"${run ? " disabled" : ""} title="${esc(jobsState.kinds[k])}">${{ fetch_games: "Скачать", analyze: "Разобрать", make_puzzles: "Задачи", report: "Отчёт" }[k]}</button>`).join("")}</div></div>
+      <div class="set-row"><div class="set-l"><b>Журнал обработки</b><span>что делалось и сколько заняло</span></div><button type="button" class="btn quiet" id="set-log"${jobsState.list.length ? "" : " disabled"}>Показать</button></div></div>
+    <div class="set-sec"><h3>Claude</h3>
+      <div class="set-row"><div class="set-l"><b>Разбирать мои ходы</b><span>твой ход на доске чата или в позиции из задачи — вопрос Claude про этот ход; то же внизу чата</span></div>
+        <label class="switch"><input type="checkbox" id="set-auto-ask"${study.autoAsk ? " checked" : ""}><span class="sw" aria-hidden="true"></span></label></div></div>
+    <div class="set-sec"><h3>Клавиши</h3><div class="keys">${KEYS.map(([k, t]) => `<div><span class="kbd">${k}</span><span>${t}</span></div>`).join("")}</div></div>`;
+}
+function renderSettings() { if (!$("#settings").hidden) $("#settings-sheet").innerHTML = settingsHtml(); }
+function openSettings() {
+  if (isLive()) return;
+  settings.logout = false;
+  $("#settings").hidden = false;
+  renderSettings();
+}
+function closeSettings() { $("#settings").hidden = true; }
+$("#settings").addEventListener("click", async (e) => {
+  if (e.target.id === "settings") { closeSettings(); return; } // the dimmed background
+  const b = e.target.closest("button");
+  if (!b || b.disabled) return;
+  if (b.id === "set-close") closeSettings();
+  else if (b.dataset.setJob) await post("/api/job", { kind: b.dataset.setJob }).catch((err) => setStatus(String(err.message), true));
+  else if (b.id === "set-log") { closeSettings(); openJobsPop(); }
+  else if (b.id === "set-logout") {
+    if (!settings.logout) { settings.logout = true; renderSettings(); setTimeout(() => { settings.logout = false; renderSettings(); }, 3000); return; }
+    settings.logout = false;
+    await liPost("/api/lichess/logout");
+  }
+});
+$("#settings").addEventListener("change", (e) => {
+  if (e.target.id !== "set-auto-ask") return;
+  $("#auto-ask").checked = e.target.checked;
+  $("#auto-ask").dispatchEvent(new Event("change"));
+});
+$("#settings").addEventListener("submit", async (e) => {
+  if (e.target.id !== "set-token-form") return;
+  e.preventDefault();
+  const r = await liPost("/api/lichess/token", { token: $("#set-token-input").value });
+  if (r) onLive(r);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "," && e.metaKey && !isLive()) { e.preventDefault(); openSettings(); }
+  if (e.key === "Escape" && !$("#settings").hidden) closeSettings();
+});
+
+// ⋯ of «Игра»: the Lichess account (disconnecting asks again inside the menu)
+function lichessMenu(anchor) {
+  const items = () => `<div class="menu-head">Lichess · ${esc(play.st?.user || "")}</div>
+    <button type="button" class="mi" data-act="settings">Настройки…</button>
+    <div class="menu-sep"></div>
+    <button type="button" class="mi danger" data-act="logout">Отключить Lichess…</button>`;
+  openMenu(anchor, items(), async (act) => {
+    if (act === "settings") openSettings();
+    else if (act === "logout") { setMenu(confirmHtml("Отключить Lichess?", "Игра и задачи Lichess перестанут работать, пока не подключишь снова.", "logout-yes", "Отключить")); return true; }
+    else if (act === "cancel") { setMenu(items()); return true; }
+    else if (act === "logout-yes") await liPost("/api/lichess/logout");
+  });
+}
 document.addEventListener("click", (e) => { if (!e.target.closest("#app-menu, #app-menu-btn")) $("#app-menu").hidden = true; });
 
 function openJobsPop() {
@@ -3368,11 +3451,11 @@ function playActionsHtml(g) {
   }
   if (g.playing) return "";
   return `<div class="actions">
-    ${g.moves.length ? `<button type="button" class="btn primary" id="review">Разобрать в анализе</button><button type="button" class="btn" id="review-claude">Разобрать с Claude</button>` : ""}
+    ${g.moves.length ? `<button type="button" class="btn primary" id="review">Разобрать в анализе</button><button type="button" class="btn" id="review-claude">${ICON.spark}Разобрать с Claude</button>` : ""}
     <button type="button" class="btn quiet" id="new-game">Новая партия</button></div>`;
 }
 
-const RULES = `<p class="hint rules">Во время партии в приложении нет ни анализа, ни Stockfish, ни задач, ни чата с Claude: Lichess запрещает любую помощь со стороны. Разбор — после партии.</p>`;
+const RULES = `<p class="hint rules" title="Lichess запрещает любую помощь со стороны: нет ни анализа, ни Stockfish, ни задач, ни чата с Claude. Разбор — после партии.">${ICON.lock}Во время партии анализ и Claude выключены — правило Lichess</p>`;
 
 function playErrHtml(s) {
   if (!s.error || s.error === "need_scope") return "";
@@ -3382,12 +3465,12 @@ function playErrHtml(s) {
 function connectHtml(s) {
   const scope = s.connected && !s.scopeOk;
   return `<div class="lobby">
-    <h2>Игра на Lichess</h2>
+    <div class="p-head"><div class="p-title"><h1 class="title">Игра на Lichess</h1></div></div>
     ${scope
       ? `<p>Вход в Lichess есть, но без права играть партии. Подключи Lichess заново и разреши «Play games with the board API».</p>`
       : `<p>Приложение подключится к твоему аккаунту Lichess и будет передавать ходы. Ходишь ты сам, как на сайте; партии идут в твой рейтинг.</p>`}
     ${loginLink(scope ? "Подключить заново" : "Подключить Lichess")}
-    <p class="hint">Откроется браузер. Lichess спросит, разрешить ли приложению «chess-coach-local» играть партии и решать задачи от твоего имени — подтверди и вернись сюда.</p>
+    <p class="hint">Откроется браузер: Lichess спросит, разрешить ли приложению играть партии и решать задачи от твоего имени. Подтверди и вернись сюда.</p>
     <details class="token-way"><summary>Другой способ: вставить личный токен</summary>
       <p class="hint">Создай токен на <a href="https://lichess.org/account/oauth/token/create?scopes[]=board:play&scopes[]=puzzle:read&scopes[]=puzzle:write&description=%D0%A8%D0%B0%D1%85%D0%BC%D0%B0%D1%82%D0%BD%D1%8B%D0%B9%20%D1%82%D1%80%D0%B5%D0%BD%D0%B5%D1%80" target="_blank" rel="noopener">странице Lichess</a> (нужные галочки там уже стоят), скопируй и вставь сюда.</p>
       <form class="newpos" id="token-form"><input id="token-input" placeholder="lip_…" autocomplete="off" spellcheck="false"><button class="btn small primary" type="submit">Сохранить</button></form>
@@ -3396,8 +3479,8 @@ function connectHtml(s) {
 }
 
 function lobbyHtml(s) {
-  const head = `<div class="acct"><span>Lichess: <b>${esc(s.user || "?")}</b>${s.stream ? "" : " · подключаюсь…"}</span>
-    <button type="button" class="link-btn${play.confirm === "logout" ? " confirm" : ""}" id="li-logout">${play.confirm === "logout" ? "точно отключить?" : "отключить"}</button></div>`;
+  const head = `<div class="p-head"><div class="p-title"><h1 class="title">Игра на Lichess</h1>
+      <div class="rep-meta">${esc(s.user || "?")}${s.stream ? "" : " · подключаюсь…"}</div></div>${dotsBtn("li-menu", "Аккаунт Lichess")}</div>`;
   if (s.seek) {
     const k = s.seek;
     return `<div class="lobby">${head}
@@ -3405,24 +3488,24 @@ function lobbyHtml(s) {
         <span id="seek-time">${fmtDur(Date.now() - k.since)}</span></div><button type="button" class="btn small" id="seek-cancel">Отменить</button></div>
       ${playErrHtml(s)}${RULES}</div>`;
   }
-  const tabs = `<div class="pmode" role="group" aria-label="С кем играть">
-    <button type="button" class="chip" data-ptab="seek" aria-pressed="${play.tab === "seek"}">С игроком</button>
-    <button type="button" class="chip" data-ptab="ai" aria-pressed="${play.tab === "ai"}">С компьютером Lichess</button></div>`;
+  const tabs = `<div class="seg wide" role="tablist" aria-label="С кем играть">
+    <button type="button" role="tab" data-ptab="seek" class="${play.tab === "seek" ? "on" : ""}" aria-selected="${play.tab === "seek"}">С игроком</button>
+    <button type="button" role="tab" data-ptab="ai" class="${play.tab === "ai" ? "on" : ""}" aria-selected="${play.tab === "ai"}">С компьютером Lichess</button></div>`;
   let body;
   if (play.tab === "ai") {
-    const chips = (key, opts) => opts.map(([v, t]) => `<button type="button" class="chip" data-ai="${key}=${v}" aria-pressed="${String(play.ai[key]) === String(v)}">${t}</button>`).join("");
-    body = `<div class="filters">
-        <div class="group"><span class="group-label">Уровень</span>${chips("level", [1, 2, 3, 4, 5, 6, 7, 8].map((x) => [x, x]))}</div>
-        <div class="group"><span class="group-label">Время</span>${chips("tc", s.aiPresets.map(([t, i]) => [`${t}+${i}`, `${t}+${i}`]))}</div>
-        <div class="group"><span class="group-label">Цвет</span>${chips("color", [["random", "Случайно"], ["white", "Белые"], ["black", "Чёрные"]])}</div></div>
-      <button type="button" class="btn primary" id="ai-go">Играть с компьютером</button>
-      <p class="hint">Без рейтинга. Уровень 1 — самый слабый, 8 — самый сильный.</p>`;
+    const seg = (key, opts) => `<div class="seg wide">${opts.map(([v, t]) => `<button type="button" data-ai="${key}=${v}" class="${String(play.ai[key]) === String(v) ? "on" : ""}" aria-pressed="${String(play.ai[key]) === String(v)}">${t}</button>`).join("")}</div>`;
+    body = `<div class="field-label">Уровень <span class="hint">1 — самый слабый, 8 — самый сильный</span></div>${seg("level", [1, 2, 3, 4, 5, 6, 7, 8].map((x) => [x, x]))}
+      <div class="field-label">Время</div>${seg("tc", s.aiPresets.map(([t, i]) => [`${t}+${i}`, `${t}+${i}`]))}
+      <div class="field-label">Цвет</div>${seg("color", [["random", "Случайно"], ["white", "Белые"], ["black", "Чёрные"]])}
+      <button type="button" class="btn primary big" id="ai-go">Играть с компьютером</button>
+      <p class="hint">Без рейтинга.</p>`;
   } else {
     body = `<div class="tc-grid">${s.seekPresets.map(([t, i]) =>
         `<button type="button" class="tc" data-seek="${t}+${i}"><b>${t}+${i}</b><span>${perfOf(t, i)}</span></button>`).join("")}</div>
-      <div class="group"><button type="button" class="chip" data-rated="1" aria-pressed="${play.rated}">Рейтинговая</button>
-        <button type="button" class="chip" data-rated="0" aria-pressed="${!play.rated}">Товарищеская</button></div>
-      <p class="hint">Нажми на контроль времени — Lichess найдёт соперника. Блиц и пулю Lichess не даёт играть из сторонних программ.</p>`;
+      <div class="seg wide"><button type="button" data-rated="1" class="${play.rated ? "on" : ""}" aria-pressed="${play.rated}">Рейтинговая</button>
+        <button type="button" data-rated="0" class="${!play.rated ? "on" : ""}" aria-pressed="${!play.rated}">Товарищеская</button></div>
+      <p class="hint">Нажми на контроль времени — Lichess найдёт соперника. ${helpBtn("seek")}</p>
+      ${helpText("seek", "Блиц и пулю Lichess не даёт играть из сторонних программ — здесь только рапид и классика.")}`;
   }
   return `<div class="lobby">${head}${tabs}${body}${playErrHtml(s)}${RULES}${historyHtml()}</div>`;
 }
@@ -3552,16 +3635,7 @@ $("#panel").addEventListener("click", async (e) => {
       await liPost("/api/lichess/ai", { level: play.ai.level, time, increment, color: play.ai.color });
       break;
     }
-    case "li-logout":
-      if (play.confirm !== "logout") {
-        play.confirm = "logout";
-        renderPlayPanel();
-        setTimeout(() => { if (play.confirm === "logout") { play.confirm = null; renderPlayPanel(); } }, 3000);
-        return;
-      }
-      play.confirm = null;
-      await liPost("/api/lichess/logout");
-      break;
+    case "li-menu": lichessMenu(t); break;
     case "to-live": play.ply = null; renderPlay(); break;
     case "new-game": play.show = null; play.ply = null; play.hist = null; renderPlay(); break;
     case "hist-more": play.histLimit = (play.histLimit || 30) + 30; loadHistory(); break;
@@ -3639,14 +3713,14 @@ function historyHtml() {
         <small class="hmeta">${esc(r.tc)} · ${r.color === "white" ? "белыми" : "чёрными"} · ${date(r.date)}${r.opening ? ` · ${esc(r.opening)}` : ""}</small></span>
       <span class="hrev">${r.review?.state === "done" ? "разобрана" : ""}</span></button>`).join("");
   return `<div class="ghist">
-    <div class="hist-head"><h3>Мои партии</h3><button type="button" class="link-btn" id="hist-refresh" ${h.fetching ? "disabled" : ""}>${h.fetching ? "скачиваю новые…" : "обновить с Lichess"}</button></div>
-    <p class="hint">Нажми на партию — Stockfish разберёт её на доске анализа.</p>
+    <div class="hist-head"><h3>Мои партии</h3>${h.fetching ? `<span class="hint">скачиваю новые…</span>` : `<button type="button" class="ibtn" id="hist-refresh" aria-label="Скачать новые партии с Lichess" title="Скачать новые партии с Lichess">${ICON.refresh}</button>`}</div>
     <div class="hlist">${rows || `<p class="hint">${h.error ? "Не удалось загрузить список." : "Партий пока нет."}</p>`}</div>
-    ${h.games.length < h.total ? `<button type="button" class="link-btn" id="hist-more">показать ещё (${h.total - h.games.length})</button>` : ""}</div>`;
+    ${h.games.length < h.total ? `<button type="button" class="btn quiet" id="hist-more">Показать ещё · ${h.total - h.games.length}</button>` : ""}</div>`;
 }
 
 // ---- state from the server ----
 function onLive(st) {
+  setTimeout(renderSettings);
   const prev = play.st;
   const pg = prev?.game || null, g = st.game;
   play.st = st;
@@ -3694,6 +3768,7 @@ function applyLock() {
     closePreviewSilently();
     hideHover();
     $("#ctx").hidden = $("#jobs-pop").hidden = $("#chats-pop").hidden = $("#app-menu").hidden = $("#model-pop").hidden = true;
+    closeSettings();
     setDrawMode(false);
     closeMenu();
     clearTimeout(askTimer);
@@ -5014,6 +5089,7 @@ async function onEvent(ev) {
       renderJobChip();
       renderJobsPop();
       renderAppMenu();
+      renderSettings();
       if (ev.job.kind === "fetch_games" && ev.job.status !== "running" && play.hist) { play.hist = null; renderPlayPanel(); } // new games in the list
       if (ev.job.kind === "fetch_games" && ev.job.status === "done") { rep.games = null; if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); }
       break;
