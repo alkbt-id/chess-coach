@@ -111,7 +111,8 @@ async def view(request: Request):
     S.view = await body(request)
     S.view["at"] = int(time.time() * 1000)
     CHATS.seen(S.view.get("chat"))
-    m = "rep" if S.view.get("rep") else S.view.get("mode")  # «Репертуар» is «Разбор» with the repertoire on (app.js)
+    # «Репертуар» is «Разбор» with the repertoire on; a board of «Игра» / «Задачи» keeps their name (app.js study.host)
+    m = "rep" if S.view.get("rep") else S.view.get("host") or S.view.get("mode")
     if m in ("study", "puzzle", "play", "rep") and m != S.settings.get("mode"):
         S.settings["mode"] = m
         S.save_settings()
@@ -524,6 +525,8 @@ async def lifespan(_: Starlette):
         review.backfill_players()
     with contextlib.suppress(Exception):  # an old board without its moves before only keeps them unclickable
         board.backfill_history()
+    with contextlib.suppress(Exception):  # an old chat without `about` only keeps its boards in «Разбор»
+        CHATS.settle_about()
     await live.L.start()
     repertoire.REP.start()
     CHATS.start()

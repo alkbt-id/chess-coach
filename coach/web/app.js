@@ -498,7 +498,7 @@ function reportView() {
       userShapes: userShapes.map((s) => ({ from: s.orig, to: s.dest, color: s.brush })),
     };
     if (preview) v.previewing = { start: preview.start, moves: preview.plies.map((p) => p.san).join(" "), at: preview.idx + 1 };
-    if (mode === "study") Object.assign(v, { sceneId: study.id, nodeId: study.node }, rep.on ? { rep: true, section: rep.section } : {});
+    if (mode === "study") Object.assign(v, { sceneId: study.id, nodeId: study.node }, rep.on ? { rep: true, section: rep.section } : {}, study.host ? { host: study.host } : {});
     else if (mode === "play") { const g = pgame(); if (g) v.game = { id: g.id, playing: g.playing, color: g.color, moves: g.moves.length }; }
     else if (mode === "puzzle" && lp.on && lp.cur) v.lpuzzle = lpView(); // a Lichess puzzle (coach/lichess_puzzles.py)
     else if (pz.cur) v.puzzle = { id: pz.cur.id, attempts: pz.st.attempts, hinted: pz.st.hinted, solution: pz.st.solution };
@@ -1191,7 +1191,10 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 // STUDY — Lichess-style analysis with a move tree
 // =====================================================================
-const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null };
+// host: "play" / "puzzle" while a board of «Игра» / «Задачи» is on screen (a game's review, a puzzle's position, Claude's
+// boards of their chats): the board works as in «Разбор» (mode "study"), the mode on screen stays «Игра» / «Задачи»;
+// hostLast: the board each of them had on screen, to come back to it
+const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null, host: null, hostLast: {} };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
 const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null, game: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
@@ -1338,12 +1341,28 @@ function activeBoard(cid) {
   const own = boardsOf(cid);
   return own.find((s) => s.id === study.chatBoard[cid]) || own.at(-1) || null;
 }
-// a board of a repertoire lesson lives only in «Репертуар» (tabs next to the tree); «Разбор» has the rest, the
-// repertoire's trees aside
+// ---- where a board lives: in the mode of the chat that made it, or of the thing it came from, and it comes on screen
+// only there. Its key is what its chat is about (chat.about: "game:<id>", "play", "puzzle:<id>", "lpuzzle:<id>",
+// "rep"), else what it came from (originKey: a game's review, a puzzle's position). «Игра» keeps the games' and the
+// lobby's boards, «Задачи» the puzzles', «Репертуар» its trees, the lessons' boards and its contents' chat's boards,
+// «Разбор» the boards with no key: the user's own and those of chats about them. ----
 const lessonBoard = (sc) => !!lessonSection(sc?.chat);
-const studyOwn = (sc) => !!sc && !sc.rep && !lessonBoard(sc);
-// a board made while a chat is open is one more board of that chat
-const claimChat = () => (ch.list.some((c) => c.id === ch.cur) ? ch.cur : undefined);
+function boardKey(sc) {
+  if (!sc || sc.rep) return null;
+  const c = chatOf(sc) ? ch.list.find((x) => x.id === sc.chat) : null;
+  return c?.about || originKey(sc) || (c ? boardsOf(c.id).map(originKey).find(Boolean) : null) || null;
+}
+const keyHome = (key) => ({ game: "play", play: "play", puzzle: "puzzle", lpuzzle: "puzzle", rep: "rep" })[(key || "").split(":")[0]] || null;
+const boardHome = (sc) => (!sc ? null : sc.rep || lessonBoard(sc) ? "rep" : keyHome(boardKey(sc)) || "study");
+const studyOwn = (sc) => boardHome(sc) === "study";
+// the mode a chat lives in, by the same rule
+const chatHome = (cid) => (lessonSection(cid) ? "rep" : boardHome(activeBoard(cid)) || keyHome(ch.list.find((c) => c.id === cid)?.about) || "study");
+// the boards of one thing — a game, the lobby of «Игра», a puzzle, the repertoire's contents — in the order they were made
+const keyBoards = (key) => (key ? study.scenes.filter((s) => !s.rep && !lessonBoard(s) && boardKey(s) === key) : []);
+// the mode on screen as the user sees it
+const viewNow = () => (rep.on ? "rep" : study.host || mode);
+// a board made while a chat is open is one more board of that chat (if the chat lives in this mode)
+const claimChat = () => (liveChat(ch.cur) && chatHome(ch.cur) === viewNow() ? ch.cur : undefined);
 
 function followBoard() {
   if (mode !== "study" || isLive()) return;
@@ -1353,7 +1372,7 @@ function followBoard() {
 }
 
 function followChat() {
-  if (mode !== "study" || isLive()) return;
+  if (mode !== "study" || isLive() || study.host) return;
   if (rep.on) { repFollowChat(); return; }
   const id = activeBoard(ch.cur)?.id ?? null;
   if (id === study.id) return;
@@ -1644,8 +1663,8 @@ function renderEvalBar() {
 
 // ---- study panel ----
 function studyPanelHtml() {
-  if (rep.on) return repPanelHtml();
   const sc = scene();
+  if (rep.on && !(sc && !sc.rep && !repSec() && !rep.game && !rep.drill)) return repPanelHtml(); // (a board of the contents' chat: as any board)
   if (!sc) { // a chat without a board, or no boards yet: the tabs row above the board keeps every board reachable
     return `<div class="p-head"><div class="p-title"><h1 class="title">Анализ</h1></div></div>
       <p class="hint">Двигай фигуры на доске или задай позицию:</p>
@@ -1668,23 +1687,36 @@ function studyPanelHtml() {
     ${tree || `<p class="hint">Ходов пока нет. Сделай ход на доске — он появится здесь.</p>`}`;
 }
 
-// the boards the tabs show: this chat's, or the boards without a chat — never another chat
-const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s) && !s.rep));
+// the boards the tabs show in «Разбор»: this chat's, or the boards without a chat — never another chat
+const scopeBoards = (sc) => (chatOf(sc) ? boardsOf(sc.chat) : study.scenes.filter((s) => !chatOf(s) && studyOwn(s)));
+// the boards next to a board of «Игра» / «Задачи» / the repertoire's contents: the boards of the same thing
+const hostBoards = (sc) => (studyOwn(sc) ? scopeBoards(sc) : lessonBoard(sc) ? boardsOf(sc.chat) : keyBoards(boardKey(sc)));
 
-// ---- the tabs above the board: in «Разбор» the open chat's boards (or the boards without a chat), in «Репертуар»
-// the tree and the open lesson's boards; ＋ makes a board (start, FEN or moves), the list reaches every board — a
-// board of another chat comes with its chat ----
+// ---- the tabs above the board: in «Разбор» the open chat's boards (or the boards without a chat); in «Репертуар»
+// the tree and the open lesson's boards (or the contents' chat's); in «Игра» and «Задачи» the game, the lobby or the
+// puzzle itself, then its boards (shown only when it has some). ＋ (in «Разбор» and a lesson) makes a board (start, FEN
+// or moves); the list reaches every board of «Разбор» — a board of another chat comes with its chat ----
 function boardTabsHtml() {
-  if (mode !== "study" || isLive() || rep.drill || rep.game) return "";
-  const sc = scene();
+  if (isLive() || rep.drill || rep.game) return "";
+  const sc = mode === "study" ? scene() : null;
   const tab = (x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`;
   const plus = (title) => `<button type="button" class="ibtn" id="board-add" aria-label="Новая доска" title="${title}">${ICON.plus}</button>`;
+  if (study.host || mode === "play" || mode === "puzzle") {
+    const key = study.host ? boardKey(sc) : activityKey();
+    const boards = keyBoards(key);
+    if (!boards.length) return "";
+    const g = pgame();
+    const label = (study.host || mode) === "puzzle" ? "Задача" : g && key === `game:${g.id}` ? "Партия" : "Игра";
+    return `<div class="bt-scroll"><button type="button" class="btab${study.host ? "" : " on"}" role="tab" aria-selected="${!study.host}" data-host-back>${label}</button>${boards.map(tab).join("")}</div>`;
+  }
+  if (mode !== "study") return "";
   if (rep.on) {
     const s = repSec();
-    const inLesson = !!s && lessonSection(ch.cur) === s.id;
-    const boards = inLesson ? boardsOf(ch.cur) : [];
+    const tree = `<button type="button" class="btab${sc?.rep ? " on" : ""}" data-rep-tree>Дерево репертуара</button>`;
+    if (!s) { const boards = keyBoards("rep"); return boards.length ? `<div class="bt-scroll">${tree}${boards.map(tab).join("")}</div>` : ""; }
+    const inLesson = lessonSection(ch.cur) === s.id;
     if (!inLesson) return "";
-    return `<div class="bt-scroll"><button type="button" class="btab${sc?.rep ? " on" : ""}" data-rep-tree>Дерево репертуара</button>${boards.map(tab).join("")}</div>${plus("Ещё одна доска этого урока")}`;
+    return `<div class="bt-scroll">${tree}${boardsOf(ch.cur).map(tab).join("")}</div>${plus("Ещё одна доска этого урока")}`;
   }
   const any = study.scenes.some(studyOwn);
   return `<div class="bt-scroll">${sc ? scopeBoards(sc).map(tab).join("") : ""}</div>${plus(chatOf(sc) ? "Ещё одна доска в этом чате" : "Новая доска")}
@@ -1700,9 +1732,9 @@ function renderBoardTabs() {
   $(".btab.on", el)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-// every board of «Разбор», grouped by chat (like «Все чаты»); the lessons' boards are in «Репертуар»
+// every board of «Разбор», grouped by chat (like «Все чаты»); the boards of the other modes stay there
 function allBoardsMenuHtml() {
-  const groups = [...ch.list.filter((c) => !lessonSection(c.id)).map((c) => [chatLabel(c), boardsOf(c.id)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && !s.rep)]]
+  const groups = [...ch.list.filter((c) => chatHome(c.id) === "study").map((c) => [chatLabel(c), boardsOf(c.id).filter(studyOwn)]), ["Без чата", study.scenes.filter((s) => !chatOf(s) && studyOwn(s))]]
     .filter(([, l]) => l.length);
   return groups.map(([t, l]) => `<div class="menu-head">${esc(t)}</div>${l.map((x) => `<button type="button" class="mi${x.id === study.id ? " on" : ""}" data-act="board:${esc(x.id)}">${esc(x.title)}</button>`).join("")}`).join("");
 }
@@ -1722,7 +1754,8 @@ async function createBoard(position) {
 $("#btabs").addEventListener("click", (e) => {
   const t = e.target.closest("button");
   if (!t) return;
-  if (t.dataset.board) { if (t.dataset.board !== study.id) setScene(t.dataset.board); }
+  if (t.dataset.board) openBoard(t.dataset.board);
+  else if (t.dataset.hostBack !== undefined) hostBack();
   else if (t.dataset.repTree !== undefined) repShowTree();
   else if (t.id === "board-add") {
     openMenu(t, newBoardMenuHtml(), async (act, el) => {
@@ -1732,6 +1765,34 @@ $("#btabs").addEventListener("click", (e) => {
     $("#pmenu input")?.focus();
   } else if (t.id === "all-boards") openMenu(t, allBoardsMenuHtml(), (act) => { if (act.startsWith("board:")) setScene(act.slice(6)); });
 });
+
+// a board chosen in the tabs: in «Игра» / «Задачи» it stays there, as their board
+function openBoard(id, node = "root") {
+  const sc = study.scenes.find((s) => s.id === id);
+  if (!sc) return;
+  const home = boardHome(sc);
+  if ((home === "play" || home === "puzzle") && study.host !== home) { setMode(home, { board: { id, node } }); return; }
+  if (id !== study.id) setScene(id, node);
+}
+
+// the first tab in «Игра» / «Задачи»: from a board back to the game (or the lobby) or the puzzle it belongs to
+function hostBack() {
+  const h = study.host;
+  if (!h) return;
+  const key = boardKey(scene()) || "";
+  study.hostLast[h] = null;
+  closePreviewSilently();
+  if (h === "play") {
+    const g = pgame();
+    play.show = g && key === `game:${g.id}` ? g.id : null;
+    play.ply = null;
+    setMode("play");
+    return;
+  }
+  setMode("puzzle");
+  const p = key.startsWith("puzzle:") ? pz.byId[key.slice(7)] : null;
+  if (p && !lp.on && pz.cur?.id !== p.id) loadPuzzle(p);
+}
 
 // ⋯ of a board in «Разбор»: its FEN, its game on Lichess, deleting it (asked again in the menu)
 function boardMenu(anchor, sc) {
@@ -1749,11 +1810,13 @@ function boardMenu(anchor, sc) {
   });
 }
 function deleteBoard(sc) {
-  const own = scopeBoards(sc);
+  const own = hostBoards(sc);
   const j = own.indexOf(sc);
   study.scenes.splice(study.scenes.indexOf(sc), 1);
   post("/api/scene/delete", { id: sc.id });
   if (own.length > 1) setScene((own[j + 1] || own[j - 1]).id); // another board of this chat (or without a chat)
+  else if (study.host) hostBack(); // the last board of a game or a puzzle: back to it
+  else if (rep.on) repShowTree();
   else { study.id = null; study.node = "root"; renderStudy(); } // the chat stays, with no board now
 }
 
@@ -1798,7 +1861,8 @@ function renderStudy() {
   if (mode !== "study") return;
   const cur = scene();
   if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
-  if (studyOwn(cur) && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after «Репертуар»
+  if (cur && study.host) study.hostLast[study.host] = { id: cur.id, node: study.node }; // «Игра» / «Задачи» come back to it
+  else if (studyOwn(cur) && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after other modes
   if (!preview) studyBoard();
   renderStudyPanel();
   renderBoardTabs();
@@ -2187,7 +2251,7 @@ function lpPanelHtml() {
   }
   h += `<div class="actions">`;
   if (st.wrong) h += `<button type="button" class="btn primary" id="lp-retry">Ещё раз</button><button type="button" class="btn" id="lp-solution">Решение</button><span class="grow"></span><button type="button" class="btn quiet" id="lp-next">Дальше →</button>`;
-  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next">Дальше →</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Открыть в анализе</button>`;
+  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next">Дальше →</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Разобрать на доске</button>`;
   else h += `<button type="button" class="btn" id="lp-solution" title="Задача засчитается как не решённая">Решение</button>`;
   h += `</div><div class="actions"><button type="button" class="btn quiet ask-btn" id="lp-ask">${ICON.spark}Спросить Claude про эту задачу</button></div>`;
   return h;
@@ -2228,7 +2292,7 @@ async function lpClick(t) {
       break;
     case "lp-study":
       post("/api/scene", { title: `Lichess ${p.id}: ${p.themes.map(themeRu).slice(0, 3).join(", ")}`, position: p.fen, orientation: p.color,
-        lines: [{ title: "решение", moves: p.solution }] }).catch((err) => setStatus(String(err.message), true));
+        lines: [{ title: "решение", moves: p.solution }], lpuzzle: p.id }).catch((err) => setStatus(String(err.message), true)); // a board of «Задачи»
       break;
     case "lp-ask":
       askClaude(st.wrong ? `Почему мой ход ${st.wrong.san} в этой задаче с Lichess плохой? Покажи на доске.` : `Поясни эту задачу с Lichess: почему решение ${p.solutionSan.join(" ")}? Покажи на доске.`);
@@ -2510,6 +2574,7 @@ function solutionTree() {
 
 function renderPuzzlePanel() {
   if (mode !== "puzzle") return;
+  renderBoardTabs(); // the puzzle's boards, if it has any
   const panel = $("#panel");
   const p = pz.cur, st = pz.st;
   const due = pz.list.filter((x) => pz.prog[x.id] && pz.prog[x.id].due <= Date.now()).length;
@@ -2567,7 +2632,7 @@ function renderPuzzlePanel() {
       <button type="button" class="btn quiet" id="skip">Пропустить →</button>`;
   } else if (finished) {
     html += `<button type="button" class="btn primary" id="next">Дальше →</button>
-      <button type="button" class="btn" id="to-study">Открыть в анализе</button>`;
+      <button type="button" class="btn" id="to-study">Разобрать на доске</button>`;
   } else {
     html += `<button type="button" class="btn primary" id="retry">Ещё раз</button>
       <button type="button" class="btn" id="solve">Решение</button><span class="grow"></span>
@@ -2733,15 +2798,16 @@ const curChat = () => ch.list.find((c) => c.id === ch.cur) || null;
 // A chat left off screen keeps running a while; the server closes it later (coach/chat.py OFF_SCREEN).
 const liveChat = (id) => (id && ch.list.some((c) => c.id === id) ? id : null);
 // a board made from a puzzle or a game shares the chat of that puzzle or game
-const originKey = (sc) => (!sc || sc.rep ? null : sc.puzzle ? `puzzle:${sc.puzzle}` : sc.game?.lichess ? `game:${sc.game.lichess}` : null);
+const originKey = (sc) => (!sc || sc.rep ? null : sc.puzzle ? `puzzle:${sc.puzzle}` : sc.lpuzzle ? `lpuzzle:${sc.lpuzzle}` : sc.game?.lichess ? `game:${sc.game.lichess}` : null);
 function keyChat(key) {
   if (!key) return null;
   return liveChat(ch.for[key]) || study.scenes.find((s) => originKey(s) === key && chatOf(s))?.chat || null;
 }
 const gameShown = () => { const g = pgame(); return g && (g.playing || play.show === g.id) ? g : null; };
 // the key of the thing on screen that is not a board or a lesson (they keep their chats themselves)
+const puzzleKey = () => (lp.on ? (lp.cur ? `lpuzzle:${lp.cur.id}` : null) : pz.cur ? `puzzle:${pz.cur.id}` : null);
 function activityKey() {
-  if (mode === "puzzle") return lp.on ? (lp.cur ? `lpuzzle:${lp.cur.id}` : null) : pz.cur ? `puzzle:${pz.cur.id}` : null;
+  if (mode === "puzzle") return puzzleKey();
   if (mode === "play") { const g = gameShown(); return g ? `game:${g.id}` : "play"; }
   if (rep.on) return repSec() ? null : "rep";
   return null;
@@ -2862,13 +2928,18 @@ async function goToChat(id) {
     followActivity();
     return;
   }
-  if (boardsOf(id).length) { // its board in «Разбор» (the one of it on screen last)
+  if (boardsOf(id).length) { // its board (the one of it on screen last), in the mode it lives in
     await openChat(id, { follow: false });
     closePreviewSilently();
-    study.id = activeBoard(id).id;
+    const sc = activeBoard(id);
+    const home = boardHome(sc);
+    if (home === "play" || home === "puzzle") { setMode(home, { board: { id: sc.id, node: "root" } }); return; }
+    if (home === "rep") { rep.section = null; repRemember(); if (!rep.on || mode !== "study") setMode("rep"); }
+    study.id = sc.id;
     study.node = "root";
     study.flipped = false;
-    if (mode !== "study" || rep.on) setMode("study", { follow: "board" }); else { renderStudy(); followBoard(); }
+    if (home === "rep") renderStudy();
+    else if (mode !== "study" || rep.on || study.host) setMode("study", { follow: "board" }); else { renderStudy(); followBoard(); }
     return;
   }
   if (kind === "game" && pgame()?.id === ref) { play.show = ref; play.ply = null; if (mode !== "play") setMode("play"); else renderPlay(); return; }
@@ -2956,13 +3027,15 @@ function entryHtml(e) {
   }
 }
 
-const QUICK = [
-  "Поясни позицию на доске",
-  "Разбери мою последнюю партию",
-  "Какие ошибки я делаю чаще всего?",
-  "Скачай новые партии и сделай из них задачи",
-];
-const quickHtml = () => `<div class="quick">${QUICK.map((q) => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`;
+// questions to start with: in «Игра» about the user's games (coach/chat.py GAME_QUESTIONS), on a board about it
+const PLAY_QUICK = ["Разбери мою последнюю партию", "Какие ошибки я делаю чаще всего?", "Скачай новые партии и сделай из них задачи"];
+const BOARD_QUICK = ["Поясни позицию на доске"];
+const quickHtml = (list) => `<div class="quick">${list.map((q) => `<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`;
+function chatQuickHtml(c) {
+  if (rep.data.lessons[c.id]) return repQuickHtml();
+  const home = chatHome(c.id);
+  return home === "play" && !(mode === "study" && scene()) ? quickHtml(PLAY_QUICK) : mode === "study" && scene() ? quickHtml(BOARD_QUICK) : "";
+}
 
 function renderChatLog() {
   const log = $("#chat-log");
@@ -2974,14 +3047,15 @@ function renderChatLog() {
       ? own(`доски «${esc(sc.title)}»`, "этой доской")
       : mode === "puzzle" && (lp.on ? lp.cur : pz.cur) ? own("этой задачи", "этой задачей")
       : mode === "play" && gameShown() ? own("этой партии", "этой партией")
-      : `<div class="chat-empty"><h3>Чат с Claude</h3><p>Claude видит доску, считает Stockfish, показывает варианты и стрелки, разбирает партии и составляет задачи.</p>${quickHtml()}</div>`;
+      : mode === "play" ? `<div class="chat-empty"><h3>Чат «Игры»</h3><p>Спроси про свои партии: Claude их видит, разбирает и показывает примеры на досках — доски останутся здесь, в «Игре».</p>${quickHtml(PLAY_QUICK)}</div>`
+      : `<div class="chat-empty"><h3>Чат с Claude</h3><p>Поставь позицию — ＋ над доской или ходы прямо на доске — и спроси про неё: Claude посчитает Stockfish и покажет варианты.</p></div>`;
     updateSendButton();
     return;
   }
   const entries = ch.entries.get(c.id) || [];
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   log.innerHTML = entries.map(entryHtml).join("")
-    + (entries.length || c.queued?.length ? "" : `<div class="chat-empty">${rep.data.lessons[c.id] ? repQuickHtml() : quickHtml()}</div>`)
+    + (entries.length || c.queued?.length ? "" : `<div class="chat-empty">${chatQuickHtml(c)}</div>`)
     + chatTailHtml(c);
   if (atBottom || c.busy) log.scrollTop = log.scrollHeight;
   updateSendButton();
@@ -3402,7 +3476,7 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#jobs-pop, #j
 // =====================================================================
 // PLAY — live games on Lichess (Board API; the server side is coach/live.py). While a game is on,
 // nothing that could help is on screen — no engine, analysis board, puzzles or Claude (Lichess fair
-// play); the server refuses those too. After the game it opens in the analysis board.
+// play); the server refuses those too. After the game its review opens here, as a board of «Игра».
 // =====================================================================
 const play = { st: null, ply: null, flipped: false, sent: null, premo: null, show: null, confirm: null, tab: "seek", rated: true, ai: { level: 3, tc: "10+0", color: "random" } };
 try { const p = JSON.parse(localStorage.getItem("play.prefs") || "{}"); Object.assign(play, { tab: p.tab || play.tab, rated: p.rated ?? play.rated, ai: { ...play.ai, ...p.ai } }); } catch {}
@@ -3596,7 +3670,7 @@ function playActionsHtml(g) {
   }
   if (g.playing) return "";
   return `<div class="actions">
-    ${g.moves.length ? `<button type="button" class="btn primary" id="review">Разобрать в анализе</button><button type="button" class="btn" id="review-claude">${ICON.spark}Разобрать с Claude</button>` : ""}
+    ${g.moves.length ? `<button type="button" class="btn primary" id="review">Разобрать</button><button type="button" class="btn" id="review-claude">${ICON.spark}Разобрать с Claude</button>` : ""}
     <button type="button" class="btn quiet" id="new-game">Новая партия</button></div>`;
 }
 
@@ -3670,6 +3744,7 @@ function gameHtml(g, s) {
 
 function renderPlayPanel() {
   if (mode !== "play") return;
+  renderBoardTabs(); // the game's or the lobby's boards, if it has any
   const panel = $("#panel");
   const s = play.st, g = pgame();
   if (!s) { panel.innerHTML = `<p class="hint">Загружаю…</p>`; return; }
@@ -3822,12 +3897,9 @@ async function openReview(gameId, withClaude = false) {
   let r;
   try { r = await post("/api/review", { game: gameId }); } catch (err) { setStatus(String(err.message), true); return; }
   await waitScene(r.scene);
-  if (!study.scenes.some((s) => s.id === r.scene)) study.scenes = (await http.get("/api/state")).study.scenes; // the event was missed
-  closePreviewSilently();
-  study.id = r.scene;
-  study.node = "root";
+  if (!study.scenes.some((s) => s.id === r.scene)) study.scenes = [...(await http.get("/api/state")).study.scenes, ...study.scenes.filter((s) => s.rep)]; // the event was missed
   if (withClaude) pendingClaude.set(r.scene, true);
-  if (mode !== "study") setMode("study", { follow: "board" }); else { renderStudy(); followBoard(); }
+  setMode("play", { board: { id: r.scene, node: "root" } }); // a game's review is a board of «Игра»
   checkPendingClaude(scene());
 }
 
@@ -3875,7 +3947,7 @@ function onLive(st) {
       play.ply = null;
       play.confirm = null;
       play.sent = null;
-      if (g.playing) { play.show = g.id; if (prev) sound("start"); }
+      if (g.playing) { play.show = g.id; study.hostLast.play = null; if (prev) sound("start"); }
     } else {
       if (g.moves.length > pg.moves.length) {
         if (play.ply != null && play.ply >= pg.moves.length) play.ply = null; // was on the last move: follow the game
@@ -4836,10 +4908,9 @@ function repToc() {
 // the section's tree back on the board (the first tab above the board in a lesson)
 function repShowTree() {
   const s = repSec();
-  if (!s) return;
   closePreviewSilently();
-  study.id = repTree(s.color)?.id ?? null;
-  study.node = s.node;
+  study.id = repTree(s?.color || rep.color)?.id ?? null;
+  study.node = s ? s.node : "root";
   renderStudy();
 }
 
@@ -5083,16 +5154,26 @@ function updateCounts() {
 
 // The chat follows what is on screen: in «Разбор» the board's chat, in «Задачи» and «Игра» the chat of the puzzle
 // or the game (followActivity), in «Репертуар» the section's lesson (repEnter).
-// follow, for «Разбор»: "screen" (default) — the board that was on screen there (back from «Репертуар»: the one
-// left there, not a repertoire tree or a lesson's board); "board" — the caller has just put a board on screen;
+// follow, for «Разбор»: "screen" (default) — the board that was on screen there (back from another mode: the one
+// left there, never a board of another mode); "board" — the caller has just put a board on screen;
 // "none" — the board and the chat stay as the caller set them (goToChat)
-function setMode(m, { save = true, follow = "screen" } = {}) {
+// board, for «Игра» / «Задачи»: { id, node } — show that board of theirs; without it they come back to the board
+// left on screen there (study.hostLast), or to the game, the lobby or the puzzle itself
+function setMode(m, { save = true, follow = "screen", board = null } = {}) {
   if (isLive() && m !== "play") return; // during a live game only the game is on screen
   closePromotion();
   closePreviewSilently();
   const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
-  const wasRep = rep.on;
+  const wasRep = rep.on, wasHost = study.host;
   rep.on = m === "rep";
+  const hb = (m === "play" || m === "puzzle") && !isLive() ? hostBoard(m, board) : null;
+  study.host = hb ? m : null;
+  if (hb) { // a board of «Игра» / «Задачи»: it works as in «Разбор», the mode on screen stays theirs
+    if (hb.id !== study.id) study.flipped = false;
+    study.id = hb.id;
+    study.node = hb.node;
+    m = "study";
+  }
   if (!rep.on) { repDrillStop(false); repGameStop(false); }
   if (rep.on) m = "study";
   mode = m;
@@ -5101,8 +5182,9 @@ function setMode(m, { save = true, follow = "screen" } = {}) {
   $("#ask-switch").hidden = !(m === "study" && !rep.on); // the repertoire only tries moves
   renderBoardTabs();
   if (rep.on) repEnter();
+  else if (study.host) { renderStudy(); followBoard(); }
   else if (m === "study") {
-    if (follow === "screen" && (wasRep || (scene() && !studyOwn(scene())))) {
+    if (follow === "screen" && (wasRep || wasHost || (scene() && !studyOwn(scene())))) {
       const last = study.scenes.find((s) => s.id === study.last?.id && studyOwn(s));
       study.id = last?.id ?? null;
       study.node = last && tindex(last).has(study.last.node) ? study.last.node : "root";
@@ -5111,6 +5193,25 @@ function setMode(m, { save = true, follow = "screen" } = {}) {
     if (follow === "none") renderChatHead(); else followBoard();
   } else if (m === "play") renderPlay(); else renderPuzzle();
   if (save) http.send("PUT", "/api/settings", { mode: view }).catch(() => {});
+}
+
+// the board «Игра» / «Задачи» show: the one asked for, else the one left there — of the puzzle still on screen
+function hostBoard(m, want) {
+  const pick = want || study.hostLast[m];
+  const sc = pick && study.scenes.find((s) => s.id === pick.id);
+  if (!sc || boardHome(sc) !== m || (!want && m === "puzzle" && boardKey(sc) !== puzzleKey())) return null;
+  return { id: sc.id, node: tindex(sc).has(pick.node) ? pick.node : "root" };
+}
+
+// a board on screen in the mode it lives in (the callers make sure that mode is the one on screen)
+function putBoard(sc, node = "root") {
+  closePreviewSilently();
+  const home = boardHome(sc);
+  if (home === "play" || home === "puzzle") { setMode(home, { save: false, board: { id: sc.id, node } }); return; }
+  study.id = sc.id;
+  study.node = node;
+  renderStudy();
+  followBoard();
 }
 
 $$(".mode").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
@@ -5185,34 +5286,28 @@ async function onEvent(ev) {
       if (ev.scene.rep) { onRepScene(ev); break; }
       upsertScene(ev.scene);
       checkPendingClaude(ev.scene);
-      // a chat working in the background does not take the board away from the chat the user is in;
-      // a lesson's board comes on screen only in «Репертуар»
-      if (ev.goto && !isLive() && (!lessonBoard(ev.scene) || rep.on) && (!chatOf(ev.scene) || ev.scene.chat === ch.cur || ev.scene.id === study.id)) {
-        closePreviewSilently();
-        study.id = ev.scene.id;
-        study.node = ev.goto;
-        // a board of a lesson stays in «Репертуар»; any other board goes to «Разбор»
-        if (mode !== "study" || (rep.on && !lessonBoard(ev.scene))) setMode("study", { save: false, follow: "board" });
-        else { renderStudy(); followBoard(); }
-      } else if (mode === "study" && study.id === ev.scene.id && ev.origin !== CLIENT) {
-        if (!tindex(ev.scene).has(study.node)) study.node = "root";
-        renderStudy();
+      { // a chat working in the background does not take the board away from the chat the user is in, and a board
+        // comes on screen only in the mode it lives in (boardHome) — never a jump to another mode
+        const sc = study.scenes.find((s) => s.id === ev.scene.id);
+        if (ev.goto && !isLive() && boardHome(sc) === viewNow() && (!chatOf(sc) || sc.chat === ch.cur || sc.id === study.id)) putBoard(sc, ev.goto);
+        else if (mode === "study" && study.id === ev.scene.id && ev.origin !== CLIENT) {
+          if (!tindex(ev.scene).has(study.node)) study.node = "root";
+          renderStudy();
+        } else renderBoardTabs(); // one more board of the game, the lobby or the puzzle on screen
       }
       updateCounts();
       break;
     case "goto": {
       const sc = study.scenes.find((s) => s.id === ev.scene);
-      if (isLive() || (lessonBoard(sc) && !rep.on) || (chatOf(sc) && sc.chat !== ch.cur && sc.id !== study.id)) break;
-      closePreviewSilently();
-      study.id = ev.scene;
-      study.node = ev.node;
-      if (mode !== "study") setMode("study", { save: false, follow: "board" }); else { renderStudy(); followBoard(); }
+      if (!sc || isLive() || boardHome(sc) !== viewNow() || (chatOf(sc) && sc.chat !== ch.cur && sc.id !== study.id)) break;
+      putBoard(sc, ev.node);
       break;
     }
     case "scenes": {
       const s = await http.get("/api/state");
       study.scenes = [...s.study.scenes, ...(s.rep?.trees || [])];
-      if (scene() || !study.id) { if (mode === "study") renderStudy(); } // nothing gone from the screen (an empty board stays empty)
+      if (scene() || !study.id) { if (mode === "study") renderStudy(); else renderBoardTabs(); } // nothing gone from the screen (an empty board stays empty)
+      else if (study.host) hostBack(); // a board of «Игра» / «Задачи» deleted in another window: back to its game or puzzle
       else { // the board on screen was deleted in another window: another board of the same chat, never another chat
         study.id = activeBoard(chatOf({ chat: ch.cur }))?.id ?? null;
         study.node = "root";
@@ -5301,8 +5396,6 @@ async function init() {
     try { rep.section = localStorage.getItem("rep.section") || null; } catch {}
     study.chatBoard = s.settings.chat_boards || {};
     study.id = s.study.current || study.scenes.at(-1)?.id || null;
-    const last = study.scenes.find((x) => x.id === study.id && studyOwn(x)) || study.scenes.filter(studyOwn).at(-1);
-    study.last = last ? { id: last.id, node: "root" } : null;
     study.engine = !!s.settings.engine;
     study.autoAsk = s.settings.autoAsk !== false;
     $("#auto-ask").checked = study.autoAsk;
@@ -5325,6 +5418,8 @@ async function init() {
     applyLock();
     ch.for = s.settings.chat_for || {};
     ch.busy = new Set(ch.list.filter((c) => c.busy).map((c) => c.id));
+    const last = study.scenes.find((x) => x.id === study.id && studyOwn(x)) || study.scenes.filter(studyOwn).at(-1); // (needs the chats)
+    study.last = last ? { id: last.id, node: "root" } : null;
     let open = "1";
     try { open = localStorage.getItem("chat.open") ?? "1"; } catch {}
     setChatOpen(open !== "0");

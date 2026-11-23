@@ -89,6 +89,10 @@ A position that follows from a board goes into its tree as a variation. A positi
 another opening, a new example) goes on a new board: `show` adds one to this chat and makes it active; the older
 boards stay as they are. Never clear or reuse a board for an unrelated position.
 
+The boards live where this chat lives and come on screen there: a chat about a board of «Разбор» — in «Разбор»,
+a chat about a game or the user's games (the «Игра» lobby) — in «Игра», a puzzle's chat — in «Задачи», a lesson —
+in «Репертуар». The app never moves the user to another mode to show your board.
+
 ## Live games
 The «Игра» mode plays real games on the user's Lichess account. Lichess forbids any outside help during a game,
 so while one is on every board tool is refused and the chat is closed. Never help with a game in progress;
@@ -357,6 +361,8 @@ class Chat:
 # "lpuzzle:<id>", "game:<id>", "rep", "play"). There are no chat tabs to close: a chat that has been off every
 # screen for OFF_SCREEN seconds is closed by the server (its `claude` process ends, a lesson writes its notes).
 OFF_SCREEN = 600
+# the prompts of the «Игра» lobby's empty chat (app.js PLAY_QUICK): a chat started with one is about the user's games
+GAME_QUESTIONS = {"Разбери мою последнюю партию", "Какие ошибки я делаю чаще всего?", "Скачай новые партии и сделай из них задачи"}
 
 
 class ChatManager:
@@ -412,6 +418,23 @@ class ChatManager:
                 S.save_settings()
                 await broadcast({"type": "chat_for", "map": S.settings["chat_for"]})
             await self.emit_list()
+
+    def settle_about(self) -> None:
+        """Once: chats from before each chat knew what it is about get it from their boards or their question, so their
+        boards show in the mode they belong to (app.js boardHome) — a game's review in «Игра», a puzzle's board in
+        «Задачи», a question about the user's games (the «Игра» lobby's prompts) in «Игра»."""
+        if S.settings.get("chats_about"):
+            return
+        for chat in self.chats.values():
+            if chat.about or chat.id in repertoire.REP.d["lessons"]:
+                continue
+            own = board.chat_scenes(chat.id)
+            chat.about = (next((f"game:{s['game']['lichess']}" for s in own if (s.get("game") or {}).get("lichess")), None)
+                          or next((f"puzzle:{s['puzzle']}" for s in own if s.get("puzzle")), None)
+                          or ("play" if chat.title in GAME_QUESTIONS else None))
+        self.save_meta()
+        S.settings["chats_about"] = 1
+        S.save_settings()
 
     def chat_for(self, key: str | None) -> "Chat | None":
         cid = (S.settings.get("chat_for") or {}).get(key) if key else None

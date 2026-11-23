@@ -194,7 +194,7 @@ async def op_show(b: dict) -> dict:
     sc, first = scenes.make_scene(f"s{S.study['seq']}", b, current_fen())
     if "history" not in sc:
         sc["history"] = await asyncio.to_thread(history.find, sc["root"]["fen"])
-    for key in ("puzzle", "chat", "game"):
+    for key in ("puzzle", "lpuzzle", "chat", "game"):  # where it came from: app.js boardHome puts it in that mode
         if b.get(key):
             sc[key] = b[key]
     S.study["scenes"].append(sc)
@@ -353,6 +353,8 @@ def op_summary(_: dict | None = None) -> dict:
             "engine_panel_on": bool(v.get("engineOn")),
         }
     if out["mode"] == "study":
+        if v.get("host"):  # a board of «Игра» / «Задачи» on screen there (a game's review, a puzzle's position, your boards)
+            out["shown_in"] = {"play": "Игра", "puzzle": "Задачи"}.get(v["host"], v["host"])
         try:
             sc = scene(v.get("sceneId"))
             node = resolve(sc, "current")
