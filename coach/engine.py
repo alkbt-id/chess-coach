@@ -35,10 +35,10 @@ class Engine:
         limit = chess.engine.Limit(nodes=nodes, time=seconds) if (nodes or seconds) else chess.engine.Limit(nodes=500_000)
         with self._lock:
             try:
-                infos = self._engine().analyse(board, limit, multipv=multipv)
+                infos = self._lines(board, limit, multipv)
             except chess.engine.EngineTerminatedError:
                 self._e = None  # restart once if Stockfish died
-                infos = self._engine().analyse(board, limit, multipv=multipv)
+                infos = self._lines(board, limit, multipv)
         out = []
         for info in infos:
             score = info["score"].pov(board.turn)
@@ -51,6 +51,24 @@ class Engine:
                 }
             )
         return out
+
+    def _lines(self, board: chess.Board, limit: chess.engine.Limit, multipv: int) -> list[chess.engine.InfoDict]:
+        """The last exact line of each multipv. When the time runs out in the middle of a re-search,
+        Stockfish's last word on a line is a bound (lowerbound / upperbound) with a 1–2 move PV and
+        an unsure score; such a line falls back to the same line from the previous depth."""
+        exact: dict[int, chess.engine.InfoDict] = {}
+        last: dict[int, chess.engine.InfoDict] = {}
+        with self._engine().analysis(board, limit, multipv=multipv) as run:
+            for info in run:
+                if "score" not in info:
+                    continue
+                k = info.get("multipv", 1)
+                last[k] = info
+                if info.get("pv") and not (info.get("lowerbound") or info.get("upperbound")):
+                    exact[k] = info
+        infos = [exact.get(k, last[k]) for k in sorted(last)]
+        infos.sort(key=lambda i: i["score"].pov(board.turn), reverse=True)  # mixed depths: keep best first
+        return infos
 
     def close(self) -> None:
         with self._lock:
