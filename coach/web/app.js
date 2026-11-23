@@ -476,6 +476,7 @@ function renderBoard() {
     requestEval(); // in «Анализ» Stockfish counts the line's position as well
     renderCeval();
     renderEvalBar();
+    if (mode === "puzzle") puzzleNav();
     return;
   }
   if (mode === "study") studyBoard(); else if (mode === "play") playBoard(); else puzzleBoard();
@@ -599,7 +600,7 @@ document.addEventListener("click", (e) => {
 // =====================================================================
 // PREVIEW — a line clicked in text, shown on the board without changing anything
 // =====================================================================
-let preview = null; // {start, plies, idx, title, nodeId?}
+let preview = null; // {start, plies, idx, title, ids?, nodeId?} — ids: the puzzle solution tree's nodes of the plies
 
 function openPreview(line, idx = 0, title = "Вариант") {
   if (!line?.plies?.length) return;
@@ -628,6 +629,14 @@ function previewStep(dir) {
   renderPreview();
   renderBoard();
   reportView();
+  previewMoved();
+}
+
+// the preview moved along a puzzle's solution: its move tree marks the move on the board
+function previewMoved() {
+  if (mode !== "puzzle" || !preview?.ids) return;
+  preview.nodeId = preview.ids[preview.idx] || "";
+  renderPuzzlePanel();
 }
 
 function previewNode() {
@@ -658,7 +667,7 @@ function renderPreview() {
 $("#preview").addEventListener("click", async (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  if (b.dataset.pi !== undefined) { preview.idx = Number(b.dataset.pi); renderPreview(); renderBoard(); reportView(); }
+  if (b.dataset.pi !== undefined) { preview.idx = Number(b.dataset.pi); renderPreview(); renderBoard(); reportView(); previewMoved(); }
   else if (b.id === "pv-close") closePreview();
   else if (b.id === "pv-add") {
     const at = previewNode();
@@ -2465,10 +2474,10 @@ function lpPlaySolution() {
     if (preview !== mine || preview.idx >= preview.plies.length - 1) { clearInterval(timer); return; }
     previewStep("next");
   }, 900);
-  // the user takes over (arrows, clicks on moves, «Вернуться»): stop playing
-  const stop = () => { clearInterval(timer); document.removeEventListener("keydown", stop, true); $("#preview").removeEventListener("click", stop, true); };
+  // the user takes over (arrows, the buttons under the board, a swipe, clicks on moves, «Вернуться»): stop playing
+  const stop = () => { clearInterval(timer); document.removeEventListener("keydown", stop, true); document.removeEventListener("pointerdown", stop, true); };
   document.addEventListener("keydown", stop, true);
-  $("#preview").addEventListener("click", stop, true);
+  document.addEventListener("pointerdown", stop, true);
 }
 
 function lpRetry() { // back to the position before the wrong move; no longer rated
@@ -2532,8 +2541,8 @@ function lpPanelHtml() {
     h += `<p class="hint">Задача ${p.rating} · ${p.themes.map(themeRu).map(esc).join(", ")} · <a href="https://lichess.org/training/${esc(p.id)}" target="_blank" rel="noopener">на Lichess ↗</a></p>`;
   }
   h += `<div class="actions">`;
-  if (st.wrong) h += `<button type="button" class="btn primary" id="lp-retry">Ещё раз</button><button type="button" class="btn" id="lp-solution">Решение</button><span class="grow"></span><button type="button" class="btn quiet" id="lp-next">Дальше →</button>`;
-  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next">Дальше →</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Разобрать на доске</button>`;
+  if (st.wrong) h += `<button type="button" class="btn primary" id="lp-retry">Ещё раз</button><button type="button" class="btn" id="lp-solution">Решение</button><span class="grow"></span><button type="button" class="btn quiet" id="lp-next" title="Следующая задача (Enter)">Дальше →</button>`;
+  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next" title="Следующая задача (Enter)">Дальше →</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Разобрать на доске</button>`;
   else h += `<button type="button" class="btn" id="lp-solution" title="Задача засчитается как не решённая">Решение</button>`;
   h += `</div><div class="actions"><button type="button" class="btn quiet ask-btn" id="lp-ask">${ICON.spark}Спросить Claude про эту задачу</button></div>`;
   return h;
@@ -2854,8 +2863,56 @@ function solutionTree() {
   return root;
 }
 
+// The solution as one line through the position on the board, once the puzzle is over or its solution is shown:
+// {start, plies, idx (the board's ply, -1 = the puzzle position), ids (own puzzles: the tree's nodes)}. ← / →, the
+// buttons under the board and a swipe step it; they never go on to the next puzzle (that is «Дальше →» or Enter).
+function puzzleLine() {
+  if (mode !== "puzzle") return null;
+  const at = fenKey(shownFen);
+  if (lp.on) {
+    const p = lp.cur, st = lp.st;
+    if (!p || !st?.done) return null;
+    const line = playLine(p.fen, p.solution);
+    return { ...line, idx: line.plies.findIndex((x) => fenKey(x.fen) === at) };
+  }
+  const p = pz.cur, st = pz.st;
+  if (!p || !(st.result?.ok || st.solution)) return null;
+  const root = st.tree || solutionTree();
+  const find = (n, acc) => {
+    if (fenKey(n.fen) === at) return acc;
+    for (const c of n.children) { const r = find(c, [...acc, c]); if (r) return r; }
+    return null;
+  };
+  const path = find(root, []) || []; // the moves down to the board's position (the user's move, or none for the puzzle position)
+  const idx = path.length - 1;
+  for (let n = path.at(-1) || root; n.children[0]; ) { n = n.children[0]; path.push(n); } // on to the end of its line
+  return { start: p.fen, plies: path, idx, ids: path.map((n) => n.id) };
+}
+
+function puzzleStep(dir) {
+  if (preview) { previewStep(dir); return; }
+  const l = puzzleLine();
+  if (!l?.plies.length) return;
+  const n = l.plies.length;
+  const idx = { first: -1, last: n - 1, next: Math.min(l.idx + 1, n - 1), prev: Math.max(l.idx - 1, -1) }[dir];
+  if (idx === undefined || idx === l.idx) return;
+  openPreview(l, idx, "Решение");
+  if (preview && l.ids) { preview.ids = l.ids; previewMoved(); }
+}
+
+// the move buttons under the board: in «Задачи» only while there are moves to step through
+function puzzleNav() {
+  if (mode !== "puzzle") return;
+  const l = preview ? { idx: preview.idx, plies: preview.plies } : puzzleLine();
+  $("#nav").classList.toggle("no-moves", !l?.plies.length);
+  if (!l) return;
+  $("[data-nav=first]").disabled = $("[data-nav=prev]").disabled = l.idx < 0;
+  $("[data-nav=last]").disabled = $("[data-nav=next]").disabled = l.idx >= l.plies.length - 1;
+}
+
 function renderPuzzlePanel() {
   if (mode !== "puzzle") return;
+  puzzleNav();
   renderBoardTabs(); // the puzzle's boards, if it has any
   const panel = $("#panel");
   const p = pz.cur, st = pz.st;
@@ -2913,12 +2970,12 @@ function renderPuzzlePanel() {
       <button type="button" class="btn" id="solve">Решение</button><span class="grow"></span>
       <button type="button" class="btn quiet" id="skip">Пропустить →</button>`;
   } else if (finished) {
-    html += `<button type="button" class="btn primary" id="next">Дальше →</button>
+    html += `<button type="button" class="btn primary" id="next" title="Следующая задача (Enter)">Дальше →</button>
       <button type="button" class="btn" id="to-study">Разобрать на доске</button>`;
   } else {
     html += `<button type="button" class="btn primary" id="retry">Ещё раз</button>
       <button type="button" class="btn" id="solve">Решение</button><span class="grow"></span>
-      <button type="button" class="btn quiet" id="next">Дальше →</button>`;
+      <button type="button" class="btn quiet" id="next" title="Следующая задача (Enter)">Дальше →</button>`;
   }
   html += `</div><div class="actions"><button type="button" class="btn quiet ask-btn" id="ask-claude">${ICON.spark}Спросить Claude про эту задачу</button></div>`;
   panel.innerHTML = html;
@@ -2935,9 +2992,11 @@ $("#panel").addEventListener("click", async (e) => {
     const trail = [];
     const walk = (n, acc) => (n.id === t.dataset.id ? (trail.push(...acc), true) : n.children.some((c) => walk(c, [...acc, c])));
     if (st.tree && walk(st.tree, []) && trail.length) {
-      openPreview({ start: p.fen, plies: trail }, trail.length - 1, "Решение");
-      preview.nodeId = t.dataset.id;
-      renderPuzzlePanel();
+      const idx = trail.length - 1;
+      for (let n = trail[idx]; n.children[0]; ) { n = n.children[0]; trail.push(n); } // on to the end of its line, so → goes on
+      openPreview({ start: p.fen, plies: trail }, idx, "Решение");
+      preview.ids = trail.map((n) => n.id);
+      previewMoved();
     }
     return;
   }
@@ -5461,7 +5520,7 @@ function setMode(m, { save = true, follow = "screen", board = null } = {}) {
   if (rep.on) m = "study";
   mode = m;
   $$(".mode").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === view)));
-  $("#nav").classList.toggle("no-moves", m === "puzzle"); // a puzzle has no moves to step through: only flip (and the pencil)
+  $("#nav").classList.toggle("no-moves", m === "puzzle"); // a puzzle shows the move buttons only with its solution on screen (puzzleNav)
   $("#ask-switch").hidden = !(m === "study" && !rep.on); // the repertoire only tries moves
   renderBoardTabs();
   if (rep.on) repEnter();
@@ -5502,7 +5561,7 @@ $$(".mode").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.m
 $("#flip").addEventListener("click", flip);
 $("#nav").addEventListener("click", (e) => {
   const b = e.target.closest("[data-nav]");
-  if (b) (mode === "play" ? playStep : studyStep)(b.dataset.nav);
+  if (b) (mode === "play" ? playStep : mode === "puzzle" ? puzzleStep : studyStep)(b.dataset.nav);
 });
 $("#auto-ask").addEventListener("change", (e) => {
   study.autoAsk = e.target.checked;
@@ -5514,6 +5573,7 @@ function swipeStep(dir) { // what ← / → do in each mode
   if (preview) previewStep(dir);
   else if (mode === "play") playStep(dir);
   else if (mode === "study") studyStep(dir);
+  else if (mode === "puzzle") puzzleStep(dir);
 }
 
 function setEngine(on) { // the switch sits in the engine block's head (cevalHtml)
@@ -5552,9 +5612,12 @@ document.addEventListener("keydown", (e) => {
   } else if (mode === "study") {
     if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); studyStep(e.key === "ArrowUp" ? "up" : "down"); return; }
     if (dirs[e.key]) { e.preventDefault(); studyStep(dirs[e.key]); }
-  } else if ((e.key === "ArrowRight" || e.key === "Enter") && $("#next")) {
+  } else if (dirs[e.key]) { // a puzzle: the arrows step through the solution once it is on screen, never on to the next puzzle
     e.preventDefault();
-    nextPuzzle();
+    puzzleStep(dirs[e.key]);
+  } else if (e.key === "Enter" && !e.target.closest("button, a") && ($("#next") || $("#lp-next"))) { // «Дальше →»
+    e.preventDefault();
+    if ($("#next")) nextPuzzle(); else lpNext();
   }
 });
 
