@@ -68,7 +68,9 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(8px + env(safe-area-inset-top, 0px) + min(32px, env(safe-area-inset-top, 0px) * 100)) 16px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .modes { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; }
 .mode { border: 0; background: none; padding: 5px 14px; border-radius: 7px; font-weight: 600; cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
-.mode[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+/* the mode on screen: a filled pill in the text colour (light on dark, dark on light) — the plain surface it had was
+   almost invisible in the dark theme; not the blue of the primary button, so it does not read as one */
+.mode[aria-selected="true"] { background: var(--ink); color: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
 /* a mode's badge: only something to do (positions or puzzles due, a live game); empty = not shown */
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent-bg); color: var(--accent-ink); font: 700 11px/18px var(--font-body); text-align: center; }
 .badge:empty { display: none; }
@@ -789,12 +791,14 @@ body.live #settings { display: none !important; }
 .pgn-list .hres { font-size: 11px; color: var(--muted); }
 .pgn-q { width: 100%; font: 13px var(--font-body); padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); }
 
-/* «Анализ»: the board editor — two rows of pieces to drag or pick, then the side to move and castling */
+/* «Анализ»: the board editor — two rows of pieces to drag or pick, then the side to move and castling.
+   Fixed sizes, no aspect-ratio: WebKit (the Mac window) does not size grid rows by a button's aspect-ratio, and the rows
+   ran into each other there; each piece is drawn inside its button, scaled to fit, never cropped. */
 .ed-box { display: grid; gap: 4px; }
-.ed-pal { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
-.ed-pc { aspect-ratio: 1; min-height: 44px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f0d9b5; cursor: grab; touch-action: none; } /* a light square: black pieces stay visible in the dark theme */
+.ed-pal { display: grid; grid-template-columns: repeat(6, minmax(0, 52px)); gap: 4px; }
+.ed-pc { position: relative; width: 100%; height: 48px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: #f0d9b5; cursor: grab; touch-action: none; } /* a light square: black pieces stay visible in the dark theme */
 .ed-pc.on { border-color: var(--accent-bg); box-shadow: inset 0 0 0 3px var(--accent-bg); background: #e2c48f; }
-.ed-box.cg-wrap piece { position: static; display: block; width: 100%; height: 100%; transform: none; z-index: auto; will-change: auto; pointer-events: none; } /* (pieces off the board, as .mat / .promo) */
+.ed-box.cg-wrap .ed-pc piece { position: absolute; top: 4px; left: 4px; right: 4px; bottom: 4px; width: auto; height: auto; background-size: contain; background-position: center; background-repeat: no-repeat; transform: none; z-index: auto; will-change: auto; pointer-events: none; } /* (pieces off the board, as .mat / .promo) */
 .ed-castle { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 13px; }
 .ed-cb { display: flex; align-items: center; gap: 6px; min-height: 30px; cursor: pointer; }
 .ed-cb.off { color: var(--muted); cursor: default; }
