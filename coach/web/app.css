@@ -68,9 +68,7 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(8px + env(safe-area-inset-top, 0px) + min(32px, env(safe-area-inset-top, 0px) * 100)) 16px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .modes { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; }
 .mode { border: 0; background: none; padding: 5px 14px; border-radius: 7px; font-weight: 600; cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
-/* the mode on screen: a filled pill in the text colour (light on dark, dark on light) — the plain surface it had was
-   almost invisible in the dark theme; not the blue of the primary button, so it does not read as one */
-.mode[aria-selected="true"] { background: var(--ink); color: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+/* the mode on screen: the look of every active tab, at the end of the file */
 /* a mode's badge: only something to do (positions or puzzles due, a live game); empty = not shown */
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent-bg); color: var(--accent-ink); font: 700 11px/18px var(--font-body); text-align: center; }
 .badge:empty { display: none; }
@@ -183,7 +181,6 @@ h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balanc
 .board-tabs .bt-label { font-size: 11px; color: var(--muted); margin-right: 2px; }
 .btab { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btab:hover { color: var(--ink); }
-.btab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; cursor: default; }
 .btab.add { background: none; border-style: dashed; color: var(--accent); }
 .bt-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .bt-end .icon { min-width: 28px; height: 26px; padding: 0 6px; }
@@ -277,7 +274,6 @@ h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balanc
 /* segmented choice (the effort in the model menu) */
 .seg { display: flex; gap: 2px; padding: 3px; margin: 2px 6px 6px; border-radius: 8px; background: var(--surface-2); }
 .seg button { flex: 1; border: 0; border-radius: 6px; background: none; padding: 5px 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
-.seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
 
 /* ---------- puzzles ---------- */
 .stats { display: flex; flex-wrap: wrap; gap: 4px 16px; }
@@ -609,10 +605,11 @@ a.btn { text-decoration: none; display: inline-flex; }
 .game-notes { display: grid; gap: 4px; }
 #game-elo { font-size: 12px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; }
 
-/* ---------- one look for every pill: filters (.chip), board tabs (.btab), repertoire chips (.rchip) ---------- */
+/* ---------- one look for every pill: filters (.chip), board tabs (.btab), repertoire chips (.rchip);
+   the active board tab looks like every active tab (the end of the file) ---------- */
 .chip, .rchip, .btab { display: inline-block; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--ink); font: 500 12px/26px var(--font-body); cursor: pointer; white-space: nowrap; }
 .chip:hover, .rchip:hover, .btab:hover { border-color: var(--accent); }
-.chip[aria-pressed="true"], .rchip.on, .btab.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.chip[aria-pressed="true"], .rchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
 .chip[aria-pressed="true"] small { color: var(--muted); opacity: 1; }
 .rchip.add, .btab.add { background: none; border-style: dashed; color: var(--accent); }
 .btab.on { cursor: default; }
@@ -655,12 +652,11 @@ a.btn { text-decoration: none; display: inline-flex; }
 .act:hover { border-color: var(--accent); }
 .act .ico { width: 20px; height: 20px; color: var(--accent); }
 .act small { font-weight: 500; font-size: 11px; color: var(--muted); }
-/* tabs of a panel: one look */
-.tabs { display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--line); }
-.tab { border: 0; border-bottom: 2px solid transparent; background: none; padding: 7px 0 6px; margin-bottom: -1px; color: var(--muted); font: 600 13px var(--font-body); cursor: pointer; }
-.tab:hover { color: var(--ink); }
-.tab.on { color: var(--ink); border-bottom-color: var(--accent); }
-.tab .n { color: var(--muted); font-weight: 500; }
+/* a row of a panel's tabs (a .seg) and the «?» after them */
+.tabs { display: flex; align-items: center; gap: 8px; }
+/* a count in a tab (Партии 12): plain text, not a badge — nothing to do */
+.seg .n { color: var(--muted); font-weight: 500; }
+.seg button.on .n { color: inherit; opacity: .7; }
 /* a two-part switch in the panel (За белых / За чёрных…) */
 .seg.wide { margin: 0; }
 .seg.wide button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; font-size: 13px; }
@@ -703,7 +699,6 @@ a.btn { text-decoration: none; display: inline-flex; }
 .prog i { display: block; height: 100%; background: var(--accent-bg); border-radius: 3px; transition: width .3s; }
 @media (any-pointer: coarse) {
   .act { min-height: 72px; }
-  .tab { padding: 12px 0 11px; font-size: 14px; }
   .seg.wide button { min-height: 40px; }
   .help-btn { width: 30px; height: 30px; font-size: 14px; }
   .seclabel, .hole { height: 32px; padding: 0 12px; font-size: 13px; }
@@ -802,3 +797,9 @@ body.live #settings { display: none !important; }
 .ed-castle { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 13px; }
 .ed-cb { display: flex; align-items: center; gap: 6px; min-height: 30px; cursor: pointer; }
 .ed-cb.off { color: var(--muted); cursor: default; }
+
+/* ---------- the active tab: one look everywhere — the modes, the panel's switches (.seg), the boards' tabs (.btab) ----------
+   A filled pill in the text colour (light on dark, dark on light): the plain surface the switches had was darker than
+   their track in the dark theme, and the boards' tabs were blue; not the blue of the primary button, so it does not read
+   as one. Last in the file, so no later rule of a single kind overrides it. */
+.mode[aria-selected="true"], .seg button.on, .btab.on { background: var(--ink); border-color: var(--ink); color: var(--surface); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.3); }

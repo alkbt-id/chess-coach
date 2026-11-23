@@ -4442,8 +4442,8 @@ function repSectionHtml(s) {
       <button type="button" class="act" id="rep-puz-menu">${ICON.target}<span>Задачи</span><small>${s.puzzles ? `${s.puzzles} из партий` : "Lichess"}</small></button></div>`;
   const tab = rep.tab || "tree";
   const nGames = games?.games ?? s.games ?? 0;
-  const tabs = `<div class="tabs" role="tablist">${[["tree", "Дерево", ""], ["games", "Партии", nGames || ""], ["lessons", "Уроки", lessons.length || ""]]
-    .map(([k, l, n]) => `<button type="button" class="tab${tab === k ? " on" : ""}" role="tab" aria-selected="${tab === k}" data-rep-tab="${k}">${l}${n !== "" ? ` <span class="n">${n}</span>` : ""}</button>`).join("")}
+  const tabs = `<div class="tabs"><div class="seg wide" role="tablist" aria-label="Раздел">${[["tree", "Дерево", ""], ["games", "Партии", nGames || ""], ["lessons", "Уроки", lessons.length || ""]]
+    .map(([k, l, n]) => `<button type="button" class="${tab === k ? "on" : ""}" role="tab" aria-selected="${tab === k}" data-rep-tab="${k}">${l}${n !== "" ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>
     <span class="grow"></span>${tab === "tree" ? helpBtn("tree") : tab === "games" ? helpBtn("games") : ""}</div>`;
   let body;
   if (tab === "games") body = repGamesHtml(s);
