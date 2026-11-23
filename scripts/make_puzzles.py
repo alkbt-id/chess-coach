@@ -7,6 +7,9 @@ Two kinds:
 Every legal move in each position is scored by Stockfish, so the trainer can
 judge any move the player tries, not only the engine's first choice.
 
+Each puzzle also gets a difficulty from Maia (coach/maia.py): "maia" = the chance a 1300 player finds a good move,
+"rating" = the same on the Elo scale. Puzzles built before Maia was installed get it on the next run.
+
 Input:  analysis/moves.jsonl, lichess/games.ndjson of the data folder (coach/config.py)
 Output: puzzles.json of the data folder
 """
@@ -24,6 +27,7 @@ import chess.engine
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from coach import maia
 from coach.config import GAMES, MOVES, NO_USER, lichess_user, stockfish
 from coach.config import PUZZLES as OUT
 
@@ -91,6 +95,36 @@ def score_moves(task: dict) -> dict | None:
     return task
 
 
+def game_board(p: dict, games: dict) -> chess.Board:
+    """The puzzle position with the game's moves before it (Maia looks at the last positions too)."""
+    g = games.get(p["game"])
+    if g and g.get("variant", "standard") == "standard" and not g.get("initialFen"):
+        board = chess.Board()
+        try:
+            for san in g["moves"].split()[: p["ply"] - 1]:
+                board.push_san(san)
+            if board.fen().split()[:4] == p["fen"].split()[:4]:
+                return board
+        except ValueError:
+            pass
+    return chess.Board(p["fen"])
+
+
+def rate(puzzles: list[dict], games: dict) -> None:
+    todo = [p for p in puzzles if "maia" not in p]
+    if not todo:
+        return
+    if not maia.available():
+        print("Maia не установлена — у задач нет сложности (brew install lc0; scripts/fetch_maia.sh)", flush=True)
+        return
+    with maia.Maia() as m:
+        for p in todo:
+            chance = m.chance(game_board(p, games), p["moves"])
+            p["maia"] = round(chance, 3)
+            p["rating"] = maia.rating(chance)
+    print(f"сложность по Maia: {len(todo)} задач", flush=True)
+
+
 def main():
     games = {g["id"]: g for g in map(json.loads, GAMES.open())}
     by_game = {}
@@ -150,6 +184,7 @@ def main():
                 print(f"{n}/{len(tasks)}", file=sys.stderr, flush=True)
     for e in _engines:
         e.quit()
+    rate(out, games)
     out.sort(key=lambda t: (t["date"], t["ply"]), reverse=True)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))

@@ -2326,7 +2326,32 @@ const KIND = { blunder: "Не зевни", missed: "Накажи" };
 const PHASE = { opening: "Дебют", middlegame: "Миттельшпиль", endgame: "Эндшпиль" };
 const SIDE = { white: "белых", black: "чёрных" };
 
-const pz = { list: [], byId: {}, prog: {}, cur: null, st: null, session: { done: 0, ok: 0 }, filt: { kind: "all", phase: "all", color: "all" }, flipped: false };
+const pz = { list: [], byId: {}, prog: {}, cur: null, st: null, session: { done: 0, ok: 0 }, filt: { kind: "all", phase: "all", color: "all" }, flipped: false, level: null };
+
+// ---- difficulty: each puzzle has a rating from Maia (coach/maia.py: how likely a 1300 player finds the answer);
+// the user has a level on the same scale, moved Elo-style by first tries only (a puzzle seen again is half remembered).
+// New puzzles are picked to be solved about 3 times of 4; a puzzle due again waits while it is above the level.
+const LEVEL0 = 1300; // the Maia net's rating: where the level starts
+const AIM = 0.75;
+const expectOk = (rating, level) => 1 / (1 + 10 ** ((rating - level) / 400));
+const kFactor = (n) => Math.max(20, 60 - 4 * n); // moves fast over the first puzzles, then settles
+const pzRating = (p) => p.rating ?? pzLevel().r; // a puzzle without a rating (no Maia) counts as on the level
+// pz.level = {r, n} saved in the settings; until the first update it is replayed from the puzzles already answered
+// (kept in levelSeed; dropped when the answers or the puzzles change)
+let levelSeed = null;
+function pzLevel() {
+  if (pz.level) return pz.level;
+  if (levelSeed) return levelSeed;
+  let r = LEVEL0, n = 0;
+  for (const [id, x] of Object.entries(pz.prog).sort((a, b) => a[1].last - b[1].last)) {
+    const p = pz.byId[id];
+    if (p?.rating == null) continue;
+    r += kFactor(n++) * ((x.fail ? 0 : 1) - expectOk(p.rating, r)); // a puzzle never failed was solved at the first try
+  }
+  return (levelSeed = { r: Math.round(r), n });
+}
+const inReach = (p) => pzRating(p) <= pzLevel().r;
+const isDue = (p, now = Date.now()) => pz.prog[p.id] && pz.prog[p.id].due <= now && inReach(p);
 
 // ---------------- LPUZZLE: rated Lichess puzzles, picked by the user's weaknesses ----------------
 // login is shared with live games (coach/lichess.py); results go to the user's puzzle rating on Lichess
@@ -2635,17 +2660,33 @@ function pickNext() {
   const lately = new Set(recent.slice(-RECENT));
   const pool = all.filter((p) => !lately.has(p.id)).length ? all.filter((p) => !lately.has(p.id)) : all;
   if (!pool.length) return pz.list.filter((p) => match(p))[0] || null;
-  const due = pool.filter((p) => pz.prog[p.id] && pz.prog[p.id].due <= now).sort((a, b) => pz.prog[a.id].due - pz.prog[b.id].due);
+  const due = pool.filter((p) => isDue(p, now)).sort((a, b) => pz.prog[a.id].due - pz.prog[b.id].due);
   if (due.length) return due[0];
-  const fresh = pool.filter((p) => !pz.prog[p.id]).sort((a, b) => hash(a.id) - hash(b.id));
+  // the new puzzle nearest to the rating the user solves 3 times of 4
+  const aim = pzLevel().r + 400 * Math.log10(1 / AIM - 1);
+  const fresh = pool.filter((p) => !pz.prog[p.id]).sort((a, b) => Math.abs(pzRating(a) - aim) - Math.abs(pzRating(b) - aim) || hash(a.id) - hash(b.id));
   if (fresh.length) return fresh[0];
-  return pool.sort((a, b) => pz.prog[a.id].due - pz.prog[b.id].due)[0];
+  const near = pool.filter(inReach);
+  return (near.length ? near : pool).sort((a, b) => pz.prog[a.id].due - pz.prog[b.id].due)[0];
 }
+
+// INTERVALS in words, for «вернётся …»
+const WAIT_RU = ["через 10 минут", "завтра", "через 3 дня", "через неделю", "через 16 дней", "через 35 дней"];
 
 function record(p, ok) {
   const old = pz.prog[p.id] || {};
   const box = ok ? Math.min((old.box || 0) + 1, INTERVALS.length - 1) : 0;
   const now = Date.now();
+  let level = null;
+  if (!pz.prog[p.id] && p.rating != null) { // a first try moves the level
+    const was = pzLevel();
+    const r = Math.round(was.r + kFactor(was.n) * ((ok ? 1 : 0) - expectOk(p.rating, was.r)));
+    pz.level = { r, n: was.n + 1 };
+    level = { r, d: r - was.r };
+    http.send("PUT", "/api/settings", { pz_level: pz.level }).catch(() => {});
+  }
+  levelSeed = null;
+  if (pz.cur === p) pz.st.rec = { ok, wait: WAIT_RU[ok ? box : 0], level };
   const rec = { box, due: now + INTERVALS[ok ? box : 0], ok: (old.ok || 0) + (ok ? 1 : 0), fail: (old.fail || 0) + (ok ? 0 : 1), last: now, lastOk: ok };
   pz.prog[p.id] = rec;
   http.send("PUT", `/api/progress/${encodeURIComponent(p.id)}`, rec).catch(() => setStatus("прогресс не сохранился", true));
@@ -2845,7 +2886,7 @@ function renderPuzzlePanel() {
   renderBoardTabs(); // the puzzle's boards, if it has any
   const panel = $("#panel");
   const p = pz.cur, st = pz.st;
-  const due = pz.list.filter((x) => pz.prog[x.id] && pz.prog[x.id].due <= Date.now()).length;
+  const due = pz.list.filter((x) => isDue(x)).length;
   const pm = (k, on, label, title, extra = "") => `<button type="button" role="tab" data-pmode="${k}" class="${on ? "on" : ""}" aria-selected="${on}" title="${title}">${label}${extra}</button>`;
   let html = `<div class="seg wide" role="tablist" aria-label="Вид задач">
       ${pm("srs", !lp.on, "Повторение", "Задачи из твоих партий возвращаются на повтор: ошибки — скоро, решённые — всё реже", due ? `<span class="badge">${due}</span>` : "")}
@@ -2887,6 +2928,7 @@ function renderPuzzlePanel() {
   } else if (st.solution) {
     html += `<div class="result info"><h3>Решение</h3>${whyHtml(st.best)}</div>`;
   }
+  if (st.rec) html += recHtml(p, st);
   if (finished) html += treeHtml(solutionTree(), preview?.nodeId || "");
   html += `<div class="actions">`;
   if (!r && !st.solution) {
@@ -2999,9 +3041,24 @@ function renderStats() {
   const now = Date.now();
   const pool = pz.list.filter((p) => match(p));
   const seen = pool.filter((p) => pz.prog[p.id]);
-  const due = seen.filter((p) => pz.prog[p.id].due <= now).length;
+  const due = seen.filter((p) => isDue(p, now)).length;
+  const waiting = seen.filter((p) => pz.prog[p.id].due <= now && !inReach(p)).length;
   const learned = seen.filter((p) => (pz.prog[p.id].box || 0) >= 3).length;
-  el.innerHTML = `<span title="${pool.length - seen.length} ещё не решал">на повтор <b>${due}</b></span><span>выучено <b>${learned}</b></span><span title="Решено за этот сеанс">сегодня <b>${pz.session.ok}/${pz.session.done}</b></span>`;
+  el.innerHTML = `<span title="Твой уровень в задачах из партий: растёт, когда решаешь новую задачу с первой попытки. Новые задачи подбираются чуть легче него">уровень <b>${pzLevel().r}</b></span>`
+    + `<span title="${pool.length - seen.length} ещё не решал${waiting ? `; ещё ${waiting} трудных ждут, пока уровень дорастёт` : ""}">на повтор <b>${due}</b></span><span>выучено <b>${learned}</b></span><span title="Решено за этот сеанс">сегодня <b>${pz.session.ok}/${pz.session.done}</b></span>`;
+}
+
+// after the answer: how it counted, when the puzzle comes back, the level
+function recHtml(p, st) {
+  const rec = st.rec;
+  const why = st.hinted ? "с подсказкой" : !st.result ? "решение показано" : "первая попытка была неверной";
+  const back = rec.ok || inReach(p) ? `вернётся ${rec.wait}` : `вернётся, когда уровень дорастёт до ${p.rating}`;
+  let h = `<p class="hint">${rec.ok ? `Решено с первой попытки — задача ${back}.` : `Засчитано как ошибка (${why}) — задача ${back}.`}</p>`;
+  if (p.rating != null) {
+    const lv = rec.level;
+    h += `<p class="rdelta">Сложность задачи <b>${p.rating}</b> · твой уровень <b>${pzLevel().r}</b>${lv?.d ? ` <span class="${lv.d > 0 ? "up" : "down"}">(${lv.d > 0 ? "+" : ""}${lv.d})</span>` : ""}</p>`;
+  }
+  return h;
 }
 
 // the filter of the user's puzzles: a chip with what is chosen; its menu has the three groups with counts
@@ -5411,7 +5468,7 @@ function updateCounts() {
   const repDue = drillDueIn({});
   $("#rep-count").textContent = repDue || "";
   const now = Date.now();
-  const due = pz.list.filter((p) => pz.prog[p.id] && pz.prog[p.id].due <= now).length;
+  const due = pz.list.filter((p) => isDue(p, now)).length;
   $("#due-count").textContent = due || "";
 }
 
@@ -5596,6 +5653,7 @@ async function onEvent(ev) {
       const list = await http.get("/api/puzzles");
       pz.list = list;
       pz.byId = Object.fromEntries(list.map((p) => [p.id, p]));
+      levelSeed = null; // the puzzles may have got their ratings
       if (mode === "puzzle") renderPuzzlePanel();
       updateCounts();
       break;
@@ -5671,6 +5729,7 @@ async function init() {
     pz.list = list;
     pz.byId = Object.fromEntries(list.map((p) => [p.id, p]));
     pz.prog = s.progress || {};
+    pz.level = s.settings.pz_level || null;
     pz.filt = { ...pz.filt, ...(s.settings.filter || {}) };
     if (Array.isArray(s.settings.recent)) recent = [...new Set([...s.settings.recent, ...recent])].slice(-60);
     if (s.settings.puzzle && pz.byId[s.settings.puzzle]) loadPuzzle(pz.byId[s.settings.puzzle]);

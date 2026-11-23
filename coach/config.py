@@ -7,12 +7,14 @@ repository (each git worktree) sees the same games, chats and Lichess login:
   lichess/      games.ndjson and profile.json (scripts/fetch_games.py)
   analysis/     moves.jsonl (scripts/analyze.py)
   puzzles.json  puzzles from the user's mistakes (scripts/make_puzzles.py)
+  maia/         the Maia net that rates how hard each puzzle is (scripts/fetch_maia.sh, coach/maia.py)
   tls/          the https certificate for the iPad (coach/lan.py), if set up
 COACH_HOME moves all of it; COACH_DATA moves only app/ (a test server with its own state and the real games).
 
 Every key of config.toml is optional and empty by default:
   lichess_user — whose games to download and analyse; empty = the account signed in to Lichess in the app
   stockfish    — path to Stockfish; empty = found on PATH or in Homebrew's usual places
+  lc0          — path to lc0, which runs Maia; empty = found on PATH or in Homebrew's usual places
   about        — a note about the player for Claude in the chat
 
 Kept free of heavy imports: scripts/*.py import it too.
@@ -32,6 +34,7 @@ GAMES = HOME / "lichess" / "games.ndjson"
 PROFILE = HOME / "lichess" / "profile.json"
 MOVES = HOME / "analysis" / "moves.jsonl"
 PUZZLES = HOME / "puzzles.json"
+MAIA = HOME / "maia"
 NO_USER = (
     "Не знаю, чьи партии брать: войди в Lichess в приложении (вкладка «Игра») "
     "или впиши свой ник в lichess_user в config.toml."
@@ -60,18 +63,24 @@ def lichess_user() -> str:
     return user.strip().lower()
 
 
-def stockfish() -> str:
-    """Path to the Stockfish binary. The app started from Finder has a short PATH, hence the fixed places."""
-    if path := _get("stockfish"):
+def _binary(name: str) -> str:
+    """config.toml, else PATH, else Homebrew's places (the app started from Finder has a short PATH); "" = none."""
+    if path := _get(name):
         return os.path.expanduser(path)
-    for path in (
-        shutil.which("stockfish"),
-        "/opt/homebrew/bin/stockfish",
-        "/usr/local/bin/stockfish",
-    ):
+    for path in (shutil.which(name), f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}"):
         if path and os.path.exists(path):
             return path
-    return "stockfish"
+    return ""
+
+
+def stockfish() -> str:
+    """Path to the Stockfish binary."""
+    return _binary("stockfish") or "stockfish"
+
+
+def lc0() -> str:
+    """Path to lc0 (runs Maia, coach/maia.py); "" when it is not installed."""
+    return _binary("lc0")
 
 
 def about() -> str:

@@ -442,6 +442,8 @@ def puzzle_summary(p: dict, pz: dict) -> dict:
         "hint_used": pz.get("hinted", False),
         "solution_shown": pz.get("solution", False),
         "progress": S.progress.get(p["id"]),
+        # coach/maia.py: chance a 1300 player finds a good move, and that as a rating; the user's level is on the same scale
+        "difficulty": {"rating": p.get("rating"), "maia_1300_finds": p.get("maia"), "user_level": (S.settings.get("pz_level") or {}).get("r")},
     }
 
 
@@ -460,6 +462,8 @@ def op_puzzles_info(b: dict) -> dict | list:
             "learned_box3plus": sum(prog[i].get("box", 0) >= 3 for i in seen),
             "solved_total": sum(prog[i].get("ok", 0) for i in seen),
             "failed_total": sum(prog[i].get("fail", 0) for i in seen),
+            # the user's level vs the puzzles' Maia ratings (app.js pzLevel); None until a first try after Maia came
+            "user_level": (S.settings.get("pz_level") or {}).get("r"),
         }
     if action == "failing":
         rows = sorted((i for i in prog if i in S.puzzles and prog[i].get("fail")), key=lambda i: (-prog[i]["fail"], prog[i].get("ok", 0)))
