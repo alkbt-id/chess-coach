@@ -10,7 +10,7 @@
   Claude adds more. A section the user no longer plays is retired: kept with its lessons, out of training.
 - A lesson is a chat bound to a section. Every chat is a separate Claude session, so Claude keeps notes per
   section (and general ones): its memory between lessons, not shown in the window. They are brought up to date
-  when a lesson's tab is closed or the lesson has been quiet for IDLE seconds; a lesson whose update was cut off
+  when a lesson has been off screen for a while (chat.py OFF_SCREEN) or quiet for IDLE seconds; a lesson whose update was cut off
   (the app quit) is caught up by the next lesson of that section, which reads its transcript.
 - The drill (app.js REPERTOIRE): the app plays the opponent's moves of a tree and the user plays their own from
   memory. A card is a position where it is the user's move, keyed by colour and position (another move order

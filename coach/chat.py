@@ -9,6 +9,7 @@ continue after the app restarts.
 """
 
 import asyncio
+import contextlib
 import itertools
 import warnings
 import json
@@ -306,6 +307,7 @@ class Chat:
         self.created: float = meta.get("created") or time.time()
         self.updated: float = meta.get("updated") or self.created
         self.cost: float = meta.get("cost") or 0.0
+        self.about: str | None = meta.get("about")  # the key of what it was started about ("puzzle:<id>", "play"…)
         self.entries: list[dict] = load_json(CHATS_DIR / f"{self.id}.json", [])
         # a reply cut off by an app restart: close what was left open
         cut = False
@@ -328,14 +330,15 @@ class Chat:
         self.worker: asyncio.Task | None = None
         self.client: ClaudeSDKClient | None = None
         self.busy = False
-        self.closing = False  # tab closed during a reply: stop Claude once the reply is done
+        self.closing = False  # closed during a reply: stop Claude once the reply is done
         self.perms: dict[str, asyncio.Future] = {}
         self.always: set[str] = set()
         self.streaming: list[dict] = []
 
     def meta(self) -> dict:
         return {"id": self.id, "title": self.title, "model": self.model, "effort": self.effort, "session_id": self.session_id,
-                "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy}
+                "created": self.created, "updated": self.updated, "cost": round(self.cost, 4), "busy": self.busy,
+                **({"about": self.about} if self.about else {})}
 
     def info(self) -> dict:
         """meta + what waits for Claude (not saved: the queue lives only while the app runs)"""
@@ -345,10 +348,20 @@ class Chat:
         save_json(CHATS_DIR / f"{self.id}.json", self.entries)
 
 
+# A chat follows what is on screen (app.js followActivity): a board's chat is sc["chat"], a lesson's is in the
+# repertoire; anything else that has a chat of its own — a puzzle, a Lichess puzzle, a game in «Игра», the
+# repertoire's contents, the lobby of «Игра» — finds it by a key in S.settings["chat_for"] ("puzzle:<id>",
+# "lpuzzle:<id>", "game:<id>", "rep", "play"). There are no chat tabs to close: a chat that has been off every
+# screen for OFF_SCREEN seconds is closed by the server (its `claude` process ends, a lesson writes its notes).
+OFF_SCREEN = 600
+
+
 class ChatManager:
     def __init__(self) -> None:
         metas = load_json(DATA / "chats.json", [])
         self.chats: dict[str, Chat] = {m["id"]: Chat(m) for m in metas}
+        self.shown: dict[str, float] = {}  # chat id -> when a window last reported it on screen
+        self.task: asyncio.Task | None = None
         jobs.on_finish(self._job_finished)
 
     # ---- bookkeeping ----
@@ -375,9 +388,9 @@ class ChatManager:
         await broadcast({"type": "chat_entry", "chat": chat.id, "entry": entry})
 
     # ---- API ----
-    async def create(self, model: str | None = None, effort: str | None = None) -> Chat:
+    async def create(self, model: str | None = None, effort: str | None = None, about: str | None = None) -> Chat:
         cid = uuid.uuid4().hex[:10]
-        chat = Chat({"id": cid, "model": model or DEFAULT_MODEL, "effort": effort or DEFAULT_EFFORT})
+        chat = Chat({"id": cid, "model": model or DEFAULT_MODEL, "effort": effort or DEFAULT_EFFORT, "about": about})
         self.chats[cid] = chat
         self.save_meta()
         await self.emit_list()
@@ -390,11 +403,51 @@ class ChatManager:
             (CHATS_DIR / f"{cid}.json").unlink(missing_ok=True)
             self.save_meta()
             await board.unbind_chat(cid)
+            keys = S.settings.get("chat_for") or {}
+            if any(v == cid for v in keys.values()):
+                S.settings["chat_for"] = {k: v for k, v in keys.items() if v != cid}
+                S.save_settings()
+                await broadcast({"type": "chat_for", "map": S.settings["chat_for"]})
             await self.emit_list()
 
+    def chat_for(self, key: str | None) -> "Chat | None":
+        cid = (S.settings.get("chat_for") or {}).get(key) if key else None
+        return self.chats.get(cid) if cid else None
+
+    async def bind_for(self, key: str, cid: str) -> None:
+        S.settings.setdefault("chat_for", {})[key] = cid
+        S.save_settings()
+        await broadcast({"type": "chat_for", "map": S.settings["chat_for"]})
+
+    # ---- chats off screen ----
+    def seen(self, cid: str | None) -> None:
+        if cid in self.chats:
+            self.shown[cid] = time.time()
+
+    async def sweep(self) -> None:
+        """Close the chats whose Claude is idle and that no window has shown for OFF_SCREEN seconds."""
+        now = time.time()
+        for chat in list(self.chats.values()):
+            alive = chat.worker is not None and not chat.worker.done()
+            if not alive or chat.busy or chat.waiting or chat.closing or chat.id == S.view.get("chat"):
+                continue
+            if now - max(self.shown.get(chat.id, 0), chat.updated) >= OFF_SCREEN:
+                with contextlib.suppress(Exception):
+                    await self.close(chat.id)
+
+    async def watch(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            await self.sweep()
+
+    def start(self) -> None:
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self.watch())
+
     async def close(self, cid: str) -> None:
-        """Tab closed: the chat and its history stay, its `claude` process ends (so Claude Limits stops
-        listing it); the next message resumes the session. A reply in progress is let finish first."""
+        """The chat left the screen a while ago (sweep): the chat and its history stay, its `claude` process ends
+        (so Claude Limits stops listing it); the next message resumes the session. A reply in progress is let
+        finish first."""
         chat = self.chats.get(cid)
         if not chat:
             return
@@ -541,7 +594,7 @@ class ChatManager:
                         chat.updated = time.time()
                         self.save_meta()
                         await self.emit_list()
-                    if chat.closing and chat.queue.empty():  # its tab was closed during the reply
+                    if chat.closing and chat.queue.empty():  # it was closed during the reply
                         chat.closing = False
                         break
         except asyncio.CancelledError:

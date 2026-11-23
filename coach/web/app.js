@@ -494,7 +494,7 @@ function reportView() {
   clearTimeout(reportTimer);
   reportTimer = setTimeout(() => {
     const v = {
-      mode, fen: shownFen, orientation: cg.state.orientation, engineOn: study.engine && mode === "study",
+      mode, fen: shownFen, orientation: cg.state.orientation, engineOn: study.engine && mode === "study", chat: ch.cur,
       userShapes: userShapes.map((s) => ({ from: s.orig, to: s.dest, color: s.brush })),
     };
     if (preview) v.previewing = { start: preview.start, moves: preview.plies.map((p) => p.san).join(" "), at: preview.idx + 1 };
@@ -1191,7 +1191,7 @@ for (const id of ["#chat-log", "#panel", "#preview"]) {
 // =====================================================================
 // STUDY — Lichess-style analysis with a move tree
 // =====================================================================
-const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {} };
+const study = { scenes: [], id: null, node: "root", flipped: false, engine: false, newpos: false, chatBoard: {}, last: null };
 // «Репертуар» (the REPERTOIRE section below): on = the repertoire is on screen; data = sections and lessons
 const rep = { on: false, data: { sections: [], lessons: {}, drill: {} }, section: null, color: "white", form: false, rename: false, del: false, trial: null, drill: null, games: null, gamesOpen: false, after: {}, delLesson: null, game: null };
 const scene = () => study.scenes.find((s) => s.id === study.id) || null;
@@ -1344,9 +1344,8 @@ const claimChat = () => (ch.list.some((c) => c.id === ch.cur) ? ch.cur : undefin
 function followBoard() {
   if (mode !== "study" || isLive()) return;
   if (rep.on) { repFollowBoard(); return; }
-  const cid = chatOf(scene());
-  if (cid !== ch.cur) openChat(cid, { follow: false });
-  else if (!cid) renderChatLog(); // its empty state names the board
+  const sc = scene();
+  showChat(chatOf(sc) ?? keyChat(originKey(sc)));
 }
 
 function followChat() {
@@ -1795,6 +1794,7 @@ function renderStudy() {
   if (mode !== "study") return;
   const cur = scene();
   if (chatOf(cur)) study.chatBoard[cur.chat] = cur.id; // the server keeps it too (the view report)
+  if (cur && !cur.rep && !rep.on) study.last = { id: cur.id, node: study.node }; // «Разбор» comes back to it after «Репертуар»
   if (!preview) studyBoard();
   renderStudyPanel();
   renderBoardTabs();
@@ -2004,6 +2004,7 @@ async function lpNext() {
   pz.flipped = false; // each puzzle starts from the solver's side, as with the user's own puzzles
   closePreviewSilently();
   renderPuzzlePanel();
+  if (mode === "puzzle") followActivity();
   try {
     const r = await post("/api/lpuzzle/next", { difficulty: lp.difficulty, angle: lp.angle });
     if (my !== lp.req) return;
@@ -2016,7 +2017,7 @@ async function lpNext() {
     lp.st = { error: String(err.message || err) };
   }
   lp.loading = false;
-  if (mode === "puzzle") { lpBoard(); renderPuzzlePanel(); renderMeta(); reportView(); }
+  if (mode === "puzzle") { lpBoard(); renderPuzzlePanel(); renderMeta(); reportView(); followActivity(); }
 }
 
 function lpBoard() {
@@ -2597,10 +2598,10 @@ $("#panel").addEventListener("click", async (e) => {
       await lpEnsure();
       lp.on = true;
       renderMeta();
-      if (!lp.cur) lpNext(); else { lpBoard(); renderPuzzlePanel(); }
+      if (!lp.cur) lpNext(); else { lpBoard(); renderPuzzlePanel(); followActivity(); }
       return;
     }
-    if (wasLp) { closePreviewSilently(); puzzleBoard(); renderMeta(); }
+    if (wasLp) { closePreviewSilently(); puzzleBoard(); renderMeta(); followActivity(); }
     ladder.on = t.dataset.pmode === "ladder";
     saveLadder();
     if (!st?.result && !st?.solution) nextPuzzle(); else renderPuzzlePanel();
@@ -2693,7 +2694,7 @@ function renderPuzzle() {
   if (lp.on) {
     // no puzzle and none on the way (e.g. the app opened in another mode while the settings were loading): fetch one
     if (lp.cur) lpBoard(); else if (!lp.loading && !lp.st) lpNext();
-    renderPuzzlePanel(); renderMeta(); return;
+    renderPuzzlePanel(); renderMeta(); followActivity(); return;
   }
   if (!pz.cur) { const p = pickNext(); if (p) { loadPuzzle(p); return; } }
   if (!preview) puzzleBoard();
@@ -2701,12 +2702,13 @@ function renderPuzzle() {
   renderMeta();
   renderEvalBar();
   reportView();
+  followActivity(); // the chat of this puzzle
 }
 
 // =====================================================================
 // CHAT — Claude inside the app
 // =====================================================================
-const ch = { list: [], cur: null, entries: new Map(), models: [], efforts: [], open: true, delConfirm: false };
+const ch = { list: [], cur: null, entries: new Map(), models: [], efforts: [], open: true, delConfirm: false, for: {}, unread: new Set(), busy: new Set() };
 const TOOL_LABEL = {
   board_state: "Смотрит на доску", show: "Показывает позицию", add_line: "Добавляет вариант", annotate: "Пишет комментарий на доске",
   goto: "Переводит доску", edit: "Правит дерево вариантов", analyse: "Считает Stockfish", puzzles: "Смотрит задачи",
@@ -2719,11 +2721,66 @@ const TOOL_LABEL = {
 const HIDDEN_TOOLS = new Set(["ToolSearch", "TodoWrite"]);
 const curChat = () => ch.list.find((c) => c.id === ch.cur) || null;
 
-// closed tabs are kept on the server (settings.closed_chats), so the Mac window and the iPad show the same tabs;
-// the chats themselves stay either way
-let closedChats = new Set();
-const saveClosed = () => http.send("PUT", "/api/settings", { closed_chats: [...closedChats] }).catch(() => {});
-const openChats = () => ch.list.filter((c) => !closedChats.has(c.id) || c.id === ch.cur);
+// ---- the chat on screen is the chat of what the user is doing; there are no chat tabs ----
+// «Разбор»: the board's chat (sc.chat); «Репертуар»: the open section's lesson, or the contents' own chat;
+// «Задачи»: the puzzle's chat; «Игра»: the chat of the game on screen, or the lobby's own one. A thing that is not a
+// board finds its chat by a key (ch.for = the server's settings.chat_for, coach/chat.py): "puzzle:<id>",
+// "lpuzzle:<id>", "game:<id>", "rep", "play". Nothing has a chat until its first message (newChat makes it).
+// A chat left off screen keeps running a while; the server closes it later (coach/chat.py OFF_SCREEN).
+const liveChat = (id) => (id && ch.list.some((c) => c.id === id) ? id : null);
+// a board made from a puzzle or a game shares the chat of that puzzle or game
+const originKey = (sc) => (!sc || sc.rep ? null : sc.puzzle ? `puzzle:${sc.puzzle}` : sc.game?.lichess ? `game:${sc.game.lichess}` : null);
+function keyChat(key) {
+  if (!key) return null;
+  return liveChat(ch.for[key]) || study.scenes.find((s) => originKey(s) === key && chatOf(s))?.chat || null;
+}
+const gameShown = () => { const g = pgame(); return g && (g.playing || play.show === g.id) ? g : null; };
+// the key of the thing on screen that is not a board or a lesson (they keep their chats themselves)
+function activityKey() {
+  if (mode === "puzzle") return lp.on ? (lp.cur ? `lpuzzle:${lp.cur.id}` : null) : pz.cur ? `puzzle:${pz.cur.id}` : null;
+  if (mode === "play") { const g = gameShown(); return g ? `game:${g.id}` : "play"; }
+  if (rep.on) return repSec() ? null : "rep";
+  return null;
+}
+// what the chat on screen is about, for its head
+function activityLabel() {
+  if (mode === "study") {
+    if (rep.on) { const s = repSec(); return s ? `Урок · ${s.name}` : "Репертуар"; }
+    const sc = scene();
+    return sc ? `Доска «${sc.title}»` : curChat() ? "Без доски" : "Разбор";
+  }
+  if (mode === "puzzle") {
+    if (lp.on) return lp.cur ? `Задача Lichess${lp.cur.rating ? ` · ${lp.cur.rating}` : ""}` : "Задачи Lichess";
+    return pz.cur ? `Задача · ${KIND[pz.cur.kind]}, ${pz.cur.moveNo}-й ход` : "Задачи";
+  }
+  const g = gameShown();
+  return g ? `Партия с ${g[other(g.color)]?.name || "соперником"}` : "Игра";
+}
+// what a chat in «Все чаты» is about; the same order as goToChat
+function chatAbout(c) {
+  const s = repSec(lessonSection(c.id));
+  if (s) return `урок · ${s.name}`;
+  const key = c.about || "";
+  const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
+  const p = kind === "puzzle" ? pz.byId[id] : null;
+  if (p) return `задача · ${KIND[p.kind]}, ${p.moveNo}-й ход`;
+  const boards = boardsOf(c.id);
+  if (boards.length) return `доска «${(activeBoard(c.id) || boards[0]).title}»${boards.length > 1 ? ` и ещё ${boards.length - 1}` : ""}`;
+  return { puzzle: "задача", lpuzzle: "задача Lichess", game: "партия", rep: "репертуар", play: "игра" }[kind] || "без доски";
+}
+// a chat nobody has written in ("empty" by the server's word too: no Claude session yet)
+const emptyChat = (c) => !!c && !c.busy && !c.session_id && !c.queued?.length && !(ch.entries.get(c.id) || []).length;
+// the activity's chat on screen (null: none yet — the empty chat names the activity)
+function showChat(id) {
+  if (id !== ch.cur) openChat(id, { follow: false });
+  else { renderChatHead(); if (!id) renderChatLog(); }
+}
+// «Задачи», «Игра» and the repertoire's contents; «Разбор» and a section follow their boards and lessons
+function followActivity() {
+  if (isLive()) return;
+  if (mode === "study" && !(rep.on && !repSec())) { followBoard(); return; }
+  showChat(keyChat(activityKey()));
+}
 
 // The Mac window tells the Claude Limits menu bar app which chat is on screen, so its "waiting for you"
 // mark on that chat clears by itself, as for a VS Code window in front (no-op in a browser or on the iPad).
@@ -2742,46 +2799,95 @@ function chatLabel(c, long = false) {
   return c.title === "Новый чат" ? `Урок: ${s.name}` : long ? `${c.title} — урок «${s.name}»` : c.title;
 }
 
-function renderChatTabs() {
+// the head of the chat: what it is about (it changes by itself with the board, the section, the puzzle, the game)
+// and «Все чаты»; a dot there when Claude is answering or has answered in a chat that is not on screen
+function renderChatHead() {
   reportShownChat();
-  $("#chat-tabs").innerHTML = openChats().map((c) =>
-    `<div class="ctab${c.id === ch.cur ? " on" : ""}" data-chat="${c.id}" title="${esc(chatLabel(c, true))}" role="tab">${c.busy ? '<span class="dot"></span>' : ""}<span class="ctitle">${esc(chatLabel(c))}</span><button type="button" class="cx" data-close="${c.id}" title="Закрыть вкладку">×</button></div>`).join("")
-    + `<button type="button" class="ctab add" id="chat-new" title="Новый чат" aria-label="Новый чат">＋</button>`
-    + `<button type="button" class="ctab hist" id="chat-hist" title="Все чаты, в том числе закрытые" aria-label="Все чаты"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></button>`;
-}
-
-async function closeChatTab(id) {
-  const c = ch.list.find((x) => x.id === id);
-  if (!c) return;
-  // an empty chat is not worth keeping; "empty" by the server's word (no Claude session yet), since a window
-  // loads a chat's entries only when it is opened (an iPad closing unopened tabs deleted real chats)
-  if (!c.busy && !c.session_id && !(ch.entries.get(id) || []).length) {
-    await post(`/api/chat/${id}/delete`).catch(() => {});
-    ch.list = ch.list.filter((x) => x.id !== id);
-    ch.entries.delete(id);
-  } else {
-    closedChats.add(id);
-    saveClosed();
-    post(`/api/chat/${id}/close`).catch(() => {}); // ends its Claude process, so Claude Limits drops it
-  }
-  if (ch.cur === id) {
-    const rest = ch.list.filter((x) => !closedChats.has(x.id) && x.id !== id);
-    await openChat(rest[0]?.id || null);
-  } else renderChatTabs();
+  const c = curChat();
+  const away = ch.list.some((x) => x.id !== ch.cur && (x.busy || ch.unread.has(x.id)));
+  $("#chat-head").innerHTML = `<span class="chead-t" title="${esc(c ? chatLabel(c, true) : "Разговора ещё нет: он начнётся с первого вопроса")}">${ICON.spark}<span>${esc(activityLabel())}</span></span>
+    <button type="button" class="ibtn" id="chat-hist" aria-label="Все чаты" title="Все чаты">${ICON.list}${away ? '<span class="dot"></span>' : ""}</button>`;
+  renderChatsPop();
 }
 
 function renderChatsPop() {
   const pop = $("#chats-pop");
   if (pop.hidden) return;
   const date = (t) => new Date(t * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  const model = (id) => ch.models.find((m) => m.id === id)?.name || id;
-  pop.innerHTML = `<h3>Все чаты</h3>${ch.list.length ? ch.list.map((c) =>
-    `<button type="button" class="chat-item${c.id === ch.cur ? " on" : ""}" data-reopen="${c.id}"><b>${esc(c.title)}</b>
-      <span>${date(c.updated)} · ${esc(model(c.model))}${closedChats.has(c.id) ? " · закрыт" : ""}</span></button>`).join("") : `<p class="hint">Чатов пока нет.</p>`}`;
+  const key = activityKey();
+  const fresh = key && keyChat(key) && !emptyChat(curChat()) ? `<button type="button" class="chat-item fresh" data-fresh="${esc(key)}"><b>＋ Новый разговор</b><span>${esc(activityLabel())}: этот разговор останется в списке</span></button>` : "";
+  const mark = (c) => (c.busy ? `<span class="dot"></span>` : ch.unread.has(c.id) ? `<span class="dot still"></span>` : "");
+  pop.innerHTML = `<h3>Все чаты</h3>${fresh}${ch.list.length ? ch.list.map((c) =>
+    `<button type="button" class="chat-item${c.id === ch.cur ? " on" : ""}" data-reopen="${c.id}"><b>${mark(c)}${esc(chatLabel(c))}</b>
+      <span>${esc(chatAbout(c))} · ${date(c.updated)} · ${esc(modelName(c.model))}</span></button>`).join("") : `<p class="hint">Чатов пока нет.</p>`}`;
   const r = $("#chat").getBoundingClientRect();
-  pop.style.top = `${r.top + 40}px`;
+  pop.style.top = `${r.top + 44}px`;
   pop.style.left = `${Math.max(8, Math.min(r.left + 8, innerWidth - 420))}px`;
   pop.style.right = "auto";
+}
+
+// a chat chosen in «Все чаты» (or in the Claude Limits menu bar app): what it is about comes on screen with it —
+// a lesson's section, a puzzle, its boards, the current game, the repertoire's contents, the lobby of «Игра»
+async function goToChat(id) {
+  if (isLive() || !liveChat(id)) return;
+  setChatOpen(true);
+  const sid = lessonSection(id);
+  if (repSec(sid)) {
+    await openChat(id, { follow: false });
+    rep.section = sid;
+    repRemember();
+    if (!rep.on || mode !== "study") setMode("rep");
+    repOpen(sid);
+    return;
+  }
+  const key = ch.list.find((c) => c.id === id).about || "";
+  const [kind, ref] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
+  if (key && ch.for[key] !== id) { // an older chat of that thing (before «Новый разговор»): its chat again
+    const was = ch.list.find((c) => c.id === ch.for[key]);
+    ch.for[key] = id;
+    post(`/api/chat/${id}/bind`).catch(() => {});
+    if (emptyChat(was)) { // a «Новый разговор» never used is not kept
+      ch.list = ch.list.filter((c) => c !== was);
+      post(`/api/chat/${was.id}/delete`).catch(() => {});
+    }
+  }
+  if (kind === "puzzle" && pz.byId[ref]) {
+    if (lp.on) { lp.on = false; lpSave(); }
+    if (pz.cur?.id !== ref) loadPuzzle(pz.byId[ref]);
+    if (mode !== "puzzle") setMode("puzzle"); else renderPuzzle();
+    followActivity();
+    return;
+  }
+  if (boardsOf(id).length) { // its board in «Разбор» (the one of it on screen last)
+    await openChat(id, { follow: false });
+    closePreviewSilently();
+    study.id = activeBoard(id).id;
+    study.node = "root";
+    study.flipped = false;
+    if (mode !== "study" || rep.on) setMode("study", { follow: "board" }); else { renderStudy(); followBoard(); }
+    return;
+  }
+  if (kind === "game" && pgame()?.id === ref) { play.show = ref; play.ply = null; if (mode !== "play") setMode("play"); else renderPlay(); return; }
+  if (kind === "play") { play.show = null; if (mode !== "play") setMode("play"); else renderPlay(); return; }
+  if (kind === "rep") { rep.section = null; repRemember(); if (!rep.on || mode !== "study") setMode("rep"); else repToc(); return; }
+  // a chat with nothing on screen to bring (no boards left, a Lichess puzzle or a game that is gone): «Разбор» without a board
+  await openChat(id, { follow: false });
+  study.id = null;
+  study.node = "root";
+  if (mode !== "study" || rep.on) setMode("study", { follow: "none" }); else renderStudy();
+  renderChatHead();
+}
+
+// «Новый разговор» about the same puzzle, game, lobby or repertoire: the old one stays in «Все чаты»
+async function freshChat(key) {
+  const c = curChat();
+  try {
+    const meta = await post("/api/chat", { for: key, fresh: true, model: c?.model, effort: c?.effort });
+    ch.list = [meta, ...ch.list.filter((x) => x.id !== meta.id)];
+    ch.for[key] = meta.id;
+    await openChat(meta.id, { follow: false });
+    $("#chat-text").focus();
+  } catch (err) { setStatus(String(err.message), true); }
 }
 
 // The chat's model and effort: a chip at the bottom of the chat; it opens a menu with both and «Удалить чат…»
@@ -2854,8 +2960,11 @@ function renderChatLog() {
   const c = curChat();
   if (!c) {
     const sc = mode === "study" ? scene() : null;
+    const own = (what, back) => `<div class="chat-empty"><h3>Чат ${what}</h3><p>Спроси Claude — разговор останется с ${back}: вернёшься к ней, и откроется он.</p></div>`;
     log.innerHTML = rep.on && mode === "study" ? repChatEmptyHtml() : sc
-      ? `<div class="chat-empty"><h3>Чат доски «${esc(sc.title)}»</h3><p>У этой доски пока нет чата. Спроси Claude — разговор останется с этой доской: выберешь её снова, и откроется он.</p></div>`
+      ? own(`доски «${esc(sc.title)}»`, "этой доской")
+      : mode === "puzzle" && (lp.on ? lp.cur : pz.cur) ? own("этой задачи", "этой задачей")
+      : mode === "play" && gameShown() ? own("этой партии", "этой партией")
       : `<div class="chat-empty"><h3>Чат с Claude</h3><p>Claude видит доску, считает Stockfish, показывает варианты и стрелки, разбирает партии и составляет задачи.</p>${quickHtml()}</div>`;
     updateSendButton();
     return;
@@ -2887,28 +2996,32 @@ function updateSendButton() {
   btn.classList.toggle("stop", !!stop);
 }
 
-function renderChat() { renderChatTabs(); renderChatOpts(); renderChatLog(); renderBoardTabs(); }
+function renderChat() { renderChatHead(); renderChatOpts(); renderChatLog(); renderBoardTabs(); }
 
 // follow: in «Разбор» the board follows the chat (its board, or an empty one for a chat without a board)
 async function openChat(id, { follow = true } = {}) {
-  if (id && closedChats.delete(id)) saveClosed();
   ch.cur = id;
   ch.delConfirm = false;
+  if (id) ch.unread.delete(id);
   if (id && !ch.entries.has(id)) {
     try { const d = await http.get(`/api/chat/${id}`); ch.entries.set(id, d.entries); } catch { ch.entries.set(id, []); }
   }
-  try { localStorage.setItem("chat.cur", id || ""); } catch {}
+  if (ch.cur !== id) return; // another chat was opened while this one was loading
   renderChat();
+  reportView(); // the server keeps the chat on screen running (coach/chat.py sweep)
   if (follow) followChat();
 }
 
-// board: the chat is made for this board (the server returns the board's own chat if it has one)
+// board: the chat is made for this board (the server returns the board's own chat if it has one, or the chat of
+// the puzzle or game the board came from); no board: the chat of the thing on screen (activityKey)
 async function newChat(board = null) {
   if (rep.on && mode === "study" && repSec() && (!board || board.rep)) return newLesson();
   const c = curChat();
-  const meta = await post("/api/chat", { model: c?.model, effort: c?.effort, scene: board?.rep ? undefined : board?.id });
+  const key = board && !board.rep ? originKey(board) : activityKey();
+  const meta = await post("/api/chat", { model: c?.model, effort: c?.effort, scene: board?.rep ? undefined : board?.id, for: key || undefined });
+  if (key && meta.about === key) ch.for[key] = meta.id; // (a board that has a chat keeps it)
   ch.list = [meta, ...ch.list.filter((x) => x.id !== meta.id)];
-  if (board) board.chat = meta.id; // the server's scene event confirms it
+  if (board && !board.rep) board.chat = meta.id; // the server's scene event confirms it (a repertoire tree has no chat)
   await openChat(meta.id, { follow: !board });
   $("#chat-text").focus();
   return meta;
@@ -2938,7 +3051,7 @@ async function sendToChat(text, sc = mode === "study" ? scene() : null, extra = 
     } else if (sc) {
       cid = chatOf(sc);
       if (!cid) {
-        const meta = await post("/api/chat", { scene: sc.id, model: curChat()?.model, effort: curChat()?.effort });
+        const meta = await post("/api/chat", { scene: sc.id, for: originKey(sc) || undefined, model: curChat()?.model, effort: curChat()?.effort });
         ch.list = [meta, ...ch.list.filter((x) => x.id !== meta.id)];
         sc.chat = cid = meta.id;
       }
@@ -2953,8 +3066,6 @@ async function sendToChat(text, sc = mode === "study" ? scene() : null, extra = 
 function askClaude(text) {
   if (isLive()) return;
   setChatOpen(true);
-  // a puzzle is a new topic: a fresh chat, not one that is about its boards
-  if (mode !== "study" && boardsOf(ch.cur).length) openChat(null, { follow: false });
   const ta = $("#chat-text");
   ta.value = text;
   autosize();
@@ -2978,26 +3089,21 @@ function setChatOpen(open) {
   reportShownChat();
 }
 
-$("#chat-tabs").addEventListener("click", (e) => {
-  const x = e.target.closest("[data-close]");
-  if (x) { e.stopPropagation(); closeChatTab(x.dataset.close); return; }
-  const b = e.target.closest("button, .ctab");
-  if (!b) return;
-  if (b.id === "chat-new") newChat();
-  else if (b.id === "chat-hist") { e.stopPropagation(); const pop = $("#chats-pop"); pop.hidden = !pop.hidden; renderChatsPop(); }
-  else if (b.dataset.chat) openChat(b.dataset.chat);
-});
-$("#chat-tabs").addEventListener("auxclick", (e) => { // middle click closes a tab, as in a browser
-  const t = e.target.closest(".ctab[data-chat]");
-  if (t && e.button === 1) closeChatTab(t.dataset.chat);
+$("#chat-head").addEventListener("click", (e) => {
+  if (!e.target.closest("#chat-hist")) return;
+  e.stopPropagation();
+  const pop = $("#chats-pop");
+  pop.hidden = !pop.hidden;
+  renderChatsPop();
 });
 $("#chats-pop").addEventListener("click", (e) => {
   e.stopPropagation();
-  const b = e.target.closest("[data-reopen]");
+  const b = e.target.closest("[data-reopen], [data-fresh]");
   if (!b) return;
   $("#chats-pop").hidden = true;
-  setChatOpen(true);
-  openChat(b.dataset.reopen);
+  if (b.dataset.fresh) freshChat(b.dataset.fresh);
+  else if (b.dataset.reopen === ch.cur) setChatOpen(true);
+  else goToChat(b.dataset.reopen);
 });
 document.addEventListener("click", (e) => { if (!e.target.closest("#chats-pop, #chat-hist")) $("#chats-pop").hidden = true; });
 $("#chat-log").addEventListener("click", (e) => {
@@ -3038,8 +3144,8 @@ $("#model-pop").addEventListener("click", async (e) => {
     await post(`/api/chat/${id}/delete`);
     ch.entries.delete(id);
     ch.list = ch.list.filter((x) => x.id !== id);
-    // in «Разбор» the board stays, now without a chat; elsewhere the next chat opens
-    openChat(mode === "study" ? null : ch.list[0]?.id || null, { follow: false });
+    for (const k of Object.keys(ch.for)) if (ch.for[k] === id) delete ch.for[k];
+    openChat(null, { follow: false }); // the board, the puzzle… stays, now without a chat
   }
 });
 document.addEventListener("click", (e) => {
@@ -3051,8 +3157,11 @@ let deltaFrame = null;
 function onChatEvent(ev) {
   if (ev.type === "chat_list") {
     ch.list = ev.chats;
-    if (ch.cur && !ch.list.some((c) => c.id === ch.cur)) ch.cur = mode === "study" ? null : ch.list[0]?.id || null;
-    renderChatTabs();
+    // a reply finished in a chat that is not on screen: a dot on «Все чаты» until it is opened
+    for (const c of ch.list) if (ch.busy.has(c.id) && !c.busy && c.id !== ch.cur) ch.unread.add(c.id);
+    ch.busy = new Set(ch.list.filter((c) => c.busy).map((c) => c.id));
+    if (ch.cur && !ch.list.some((c) => c.id === ch.cur)) { ch.cur = null; renderChatLog(); }
+    renderChatHead();
     renderChatOpts();
     const log = $("#chat-log");
     const tail = $(".chat-tail", log);
@@ -3572,6 +3681,7 @@ function renderPlay() {
   renderEvalBar();
   updateCounts();
   reportView();
+  followActivity(); // the chat of the game on screen, or the lobby's
 }
 
 // clocks, the seek timer and the "claim victory" countdown tick without redrawing the panel
@@ -4660,6 +4770,7 @@ function repEnter() {
   const sc = scene();
   if (!s) {
     if (!sc?.rep) { study.id = repTree(rep.color)?.id ?? null; study.node = "root"; }
+    showChat(keyChat("rep"));
   } else {
     const fits = sc && (sc.rep === s.color || (sc.chat && lessonSection(sc.chat) === s.id));
     if (!fits) { study.id = repTree(s.color)?.id ?? null; study.node = s.node; }
@@ -4670,6 +4781,7 @@ function repEnter() {
   }
   renderStudy();
   if (!curChat()) renderChatLog();
+  renderChatHead();
 }
 
 function repOpen(sid) {
@@ -4683,7 +4795,7 @@ function repOpen(sid) {
   study.node = s.node;
   study.flipped = false;
   const l = lessonSection(ch.cur) === sid ? ch.cur : lessonsOf(sid)[0]?.id ?? null;
-  if (l !== ch.cur) openChat(l, { follow: false }); else renderChatLog();
+  if (l !== ch.cur) openChat(l, { follow: false }); else { renderChatLog(); renderChatHead(); }
   renderStudy();
   $("#panel").scrollTop = 0;
 }
@@ -4695,7 +4807,7 @@ function repToc() {
   study.id = repTree(rep.color)?.id ?? null;
   study.node = "root";
   renderStudy();
-  if (!curChat()) renderChatLog();
+  showChat(keyChat("rep")); // the contents' own chat
 }
 
 // the section's tree back on the board (the first tab above the board in a lesson)
@@ -4712,6 +4824,7 @@ function repShowTree() {
 function repFollowBoard() {
   const sc = scene();
   if (sc && !sc.rep && chatOf(sc) && sc.chat !== ch.cur) openChat(sc.chat, { follow: false });
+  else renderChatHead();
 }
 
 // a chat opened in «Репертуар»: a lesson brings its section; another chat leaves the section as it is
@@ -4741,7 +4854,7 @@ async function repDeleteLesson(id) {
   ch.entries.delete(id);
   ch.list = ch.list.filter((c) => c.id !== id);
   delete rep.data.lessons[id];
-  if (ch.cur === id) openChat(lessonsOf(sid)[0]?.id ?? null, { follow: false }); else renderChatTabs();
+  if (ch.cur === id) openChat(lessonsOf(sid)[0]?.id ?? null, { follow: false }); else renderChatHead();
   renderStudy();
 }
 
@@ -4945,13 +5058,17 @@ function updateCounts() {
   $("#due-count").textContent = due || "";
 }
 
-// follow: which side wins when «Разбор» opens — "board" (a board was just chosen: its chat comes) or, by default,
-// the open chat if it has a board (its board comes), else the board on screen
-function setMode(m, { save = true, follow = "chat" } = {}) {
+// The chat follows what is on screen: in «Разбор» the board's chat, in «Задачи» and «Игра» the chat of the puzzle
+// or the game (followActivity), in «Репертуар» the section's lesson (repEnter).
+// follow, for «Разбор»: "screen" (default) — the board that was on screen there (back from «Репертуар»: the one
+// left there, not a repertoire tree or a lesson's board); "board" — the caller has just put a board on screen;
+// "none" — the board and the chat stay as the caller set them (goToChat)
+function setMode(m, { save = true, follow = "screen" } = {}) {
   if (isLive() && m !== "play") return; // during a live game only the game is on screen
   closePromotion();
   closePreviewSilently();
   const view = m; // «Репертуар» is «Разбор» with the repertoire on: the same board, tree and engine
+  const wasRep = rep.on;
   rep.on = m === "rep";
   if (!rep.on) { repDrillStop(false); repGameStop(false); }
   if (rep.on) m = "study";
@@ -4962,9 +5079,13 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   renderBoardTabs();
   if (rep.on) repEnter();
   else if (m === "study") {
-    if (scene()?.rep) { study.id = activeBoard(ch.cur)?.id ?? null; study.node = "root"; } // the repertoire stays in its mode
+    if (follow === "screen" && (wasRep || scene()?.rep)) {
+      const last = study.scenes.find((s) => s.id === study.last?.id && !s.rep);
+      study.id = last?.id ?? null;
+      study.node = last && tindex(last).has(study.last.node) ? study.last.node : "root";
+    }
     renderStudy();
-    if (follow === "chat" && boardsOf(ch.cur).length) followChat(); else followBoard();
+    if (follow === "none") renderChatHead(); else followBoard();
   } else if (m === "play") renderPlay(); else renderPuzzle();
   if (save) http.send("PUT", "/api/settings", { mode: view }).catch(() => {});
 }
@@ -5129,9 +5250,9 @@ async function onEvent(ev) {
     case "rep_drill": rep.data.drill[ev.key] = ev.card; updateCounts(); if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); break;
     case "rep": Object.assign(rep.data, ev.rep); if (rep.on && mode === "study") { renderStudyPanel(); if (!curChat()) renderChatLog(); } break;
     case "reload": location.reload(); break;
-    case "closed_chats": // a tab closed or reopened in another window (the Mac or the iPad)
-      closedChats = new Set(ev.ids || []);
-      renderChatTabs();
+    case "chat_for": // a puzzle, a game… got its chat (here or in another window): show it if that thing is on screen
+      ch.for = ev.map || {};
+      followActivity();
       break;
     case "eval": { // test harness: only a server started with COACH_DEBUG=1 sends this
       let result;
@@ -5156,6 +5277,8 @@ async function init() {
     try { rep.section = localStorage.getItem("rep.section") || null; } catch {}
     study.chatBoard = s.settings.chat_boards || {};
     study.id = s.study.current || study.scenes.at(-1)?.id || null;
+    const last = study.scenes.find((x) => x.id === study.id && !x.rep) || study.scenes.filter((x) => !x.rep).at(-1);
+    study.last = last ? { id: last.id, node: "root" } : null;
     study.engine = !!s.settings.engine;
     study.autoAsk = s.settings.autoAsk !== false;
     $("#auto-ask").checked = study.autoAsk;
@@ -5176,16 +5299,11 @@ async function init() {
     play.st = s.live || null;
     if (play.st?.game?.playing) play.show = play.st.game.id;
     applyLock();
-    let saved = null, open = "1";
-    try { saved = localStorage.getItem("chat.cur"); open = localStorage.getItem("chat.open") ?? "1"; } catch {}
+    ch.for = s.settings.chat_for || {};
+    ch.busy = new Set(ch.list.filter((c) => c.busy).map((c) => c.id));
+    let open = "1";
+    try { open = localStorage.getItem("chat.open") ?? "1"; } catch {}
     setChatOpen(open !== "0");
-    if (Array.isArray(s.settings.closed_chats)) closedChats = new Set(s.settings.closed_chats);
-    else { // the first start since closed tabs moved to the server: this window's own list, if it has one
-      try { closedChats = new Set(JSON.parse(localStorage.getItem("chat.closed") || "[]")); } catch {}
-      if (closedChats.size) saveClosed();
-    }
-    const openList = ch.list.filter((c) => !closedChats.has(c.id));
-    await openChat(openList.some((c) => c.id === saved) ? saved : openList[0]?.id || null, { follow: false }); // in «Разбор» setMode brings the board's chat
     renderJobChip();
     setMode(isLive() ? "play" : ["study", "play", "rep"].includes(s.settings.mode) ? s.settings.mode : "puzzle", { save: false });
   } catch (e) {
@@ -5213,9 +5331,7 @@ window.coachOpenChat = async (id) => {
   if (!ch.list.some((c) => c.id === id)) {
     try { ch.list = (await http.get("/api/state")).chats || ch.list; } catch {}
   }
-  if (!ch.list.some((c) => c.id === id)) return;
-  setChatOpen(true);
-  await openChat(id);
+  await goToChat(id);
 };
 
 init();

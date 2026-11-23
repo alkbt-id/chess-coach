@@ -110,6 +110,7 @@ async def view(request: Request):
     prev = S.view.get("sceneId")
     S.view = await body(request)
     S.view["at"] = int(time.time() * 1000)
+    CHATS.seen(S.view.get("chat"))
     m = "rep" if S.view.get("rep") else S.view.get("mode")  # «Репертуар» is «Разбор» with the repertoire on (app.js)
     if m in ("study", "puzzle", "play", "rep") and m != S.settings.get("mode"):
         S.settings["mode"] = m
@@ -133,8 +134,6 @@ async def put_settings(request: Request):
     b = await body(request)
     S.settings.update(b)
     S.save_settings()
-    if "closed_chats" in b:  # the other windows (the Mac, the iPad) update their chat tabs
-        await broadcast({"type": "closed_chats", "ids": S.settings["closed_chats"]})
     return JSONResponse({"ok": True})
 
 
@@ -245,14 +244,21 @@ async def play(request: Request):
 # ---------------- chats ----------------
 @guarded
 async def chat_new(request: Request):
-    """A new chat; with `scene`, the chat of that board: its own chat if it has one, else a new chat it joins."""
+    """A new chat; with `scene`, the chat of that board: its own chat if it has one, else a new chat it joins.
+    With `for` (a key of S.settings["chat_for"], see coach/chat.py): the chat of that thing — a puzzle, a game… —
+    if it has one (a board of it joins that chat), else a new chat bound to it."""
     b = await body(request)
     sc = board.find_scene(b.get("scene"))
     if b.get("scene") and sc is None:
         return err("no such board", 404)
     if sc and sc.get("chat") in CHATS.chats:
         return JSONResponse(CHATS.chats[sc["chat"]].info())
-    chat = await CHATS.create(b.get("model"), b.get("effort"))
+    key = b.get("for") or None
+    chat = None if b.get("fresh") else CHATS.chat_for(key)  # fresh: «Новый разговор», the old chat stays in the list
+    if chat is None:
+        chat = await CHATS.create(b.get("model"), b.get("effort"), about=key)
+        if key:
+            await CHATS.bind_for(key, chat.id)
     if sc:
         await board.bind_chat(sc, chat.id)
     return JSONResponse(chat.info())
@@ -300,6 +306,16 @@ async def chat_perm(request: Request):
 @guarded
 async def chat_delete(request: Request):
     await CHATS.delete(request.path_params["cid"])
+    return JSONResponse({"ok": True})
+
+
+async def chat_bind(request: Request):
+    """An older chat about a puzzle, a game… chosen again (in «Все чаты»): it is that thing's chat again."""
+    chat = CHATS.chats.get(request.path_params["cid"])
+    if not chat:
+        return err("no such chat", 404)
+    if chat.about:
+        await CHATS.bind_for(chat.about, chat.id)
     return JSONResponse({"ok": True})
 
 
@@ -505,6 +521,7 @@ async def lifespan(_: Starlette):
         board.backfill_history()
     await live.L.start()
     repertoire.REP.start()
+    CHATS.start()
     yield
     await live.L.close()
     for chat in list(CHATS.chats.values()):
@@ -544,6 +561,7 @@ app = Starlette(
         Route("/api/chat/{cid}/permission", chat_perm, methods=["POST"]),
         Route("/api/chat/{cid}/delete", chat_delete, methods=["POST"]),
         Route("/api/chat/{cid}/close", chat_close, methods=["POST"]),
+        Route("/api/chat/{cid}/bind", chat_bind, methods=["POST"]),
         Route("/api/lichess", li_state),
         Route("/api/lichess/login", li_login),
         Route("/api/lichess/callback", li_callback),

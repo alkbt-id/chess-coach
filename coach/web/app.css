@@ -317,11 +317,13 @@ h1.title { font: 700 18px/1.25 var(--font-display); margin: 0; text-wrap: balanc
 .bar i.bad { background: var(--bad); }
 
 /* ---------- chat ---------- */
-.chat-tabs { display: flex; gap: 2px; padding: 6px 6px 0; overflow-x: auto; background: var(--surface-2); border-bottom: 1px solid var(--line); flex: none; }
-.ctab { border: 1px solid transparent; border-bottom: 0; background: none; border-radius: 7px 7px 0 0; padding: 5px 10px; font-size: 12px; cursor: pointer; color: var(--muted); max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
-.ctab.on { background: var(--surface); border-color: var(--line); color: var(--ink); font-weight: 600; margin-bottom: -1px; }
-.ctab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bg); margin-right: 5px; animation: pulse 1s infinite; vertical-align: middle; }
-.ctab.add { font-weight: 700; color: var(--accent); }
+/* the head of the chat: what it is about (it follows the screen by itself) and «Все чаты» */
+.chat-head { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 2px 4px 2px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line); flex: none; }
+.chead-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.chead-t > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chead-t .ico { width: 14px; height: 14px; flex: none; }
+#chat-hist { position: relative; flex: none; }
+#chat-hist .dot { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-bg); box-shadow: 0 0 0 2px var(--surface-2); }
 @keyframes pulse { 50% { opacity: .3; } }
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .msg-user { align-self: flex-end; max-width: 88%; background: var(--accent-bg); color: var(--accent-ink); border-radius: 12px 12px 3px 12px; padding: 7px 11px; white-space: pre-wrap; word-wrap: break-word; }
@@ -379,20 +381,16 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .sqr:hover { background: var(--warn-soft); border-radius: 3px; }
 cg-board square.hl { background: rgba(255, 190, 0, .5); }
 
-/* chat tabs: close button and the list of all chats */
-.ctab { display: inline-flex; align-items: center; gap: 4px; user-select: none; -webkit-user-select: none; }
-.ctab .ctitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctab .cx { border: 0; background: none; color: inherit; opacity: 0; border-radius: 4px; padding: 0 4px; line-height: 1.3; cursor: pointer; font-size: 13px; flex: none; }
-.ctab:hover .cx, .ctab.on .cx { opacity: .55; }
-.ctab .cx:hover { opacity: 1; background: var(--surface-3); }
-.ctab.hist { margin-left: auto; display: inline-flex; align-items: center; }
-.ctab.hist svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* «Все чаты»: every chat, what it is about; a dot — Claude is answering (pulses) or has answered there */
 #chats-pop { width: 400px; max-height: 70vh; overflow-y: auto; gap: 4px; }
 .chat-item { display: grid; gap: 1px; text-align: left; border: 1px solid transparent; background: none; border-radius: 7px; padding: 6px 9px; cursor: pointer; }
 .chat-item:hover { background: var(--accent-soft); }
 .chat-item.on { border-color: var(--accent); }
 .chat-item b { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-item span { font-size: 11px; color: var(--muted); }
+.chat-item span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bg); margin-right: 6px; vertical-align: middle; animation: pulse 1s infinite; }
+.chat-item .dot.still { animation: none; }
+.chat-item.fresh b { color: var(--accent); }
 /* material difference (Lichess style): the pieces a side is up, greyed, and +N */
 .mat.cg-wrap { display: flex; align-items: center; height: 34px; gap: 12px; font: 600 15px var(--font-body); color: var(--ink); }
 .mat .grp { display: inline-flex; }
@@ -624,8 +622,7 @@ a.btn { text-decoration: none; display: inline-flex; }
   .btn, .btn.small, .tbtn, .chip-sel, .menu .mi { min-height: 44px; }
   .chip, .rchip, .btab { line-height: 42px; padding: 0 14px; font-size: 13px; }
   .ibtn { width: 44px; height: 44px; }
-  .ctab { min-height: 44px; }
-  .ctab .cx { opacity: .6; padding: 6px 8px; } /* no hover: the tab's × is always there */
+  .chat-item { min-height: 44px; }
   .menu .mi { font-size: 15px; }
   .seg button { min-height: 40px; font-size: 13px; }
   .sw { width: 38px; height: 22px; border-radius: 11px; }
