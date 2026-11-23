@@ -1429,21 +1429,33 @@ let askAt = null;
 const askHtml = (n) => (n.id === askAt
   ? `<button type="button" class="ask-inline" id="ask-line" title="Один вопрос Claude про все твои ходы подряд до этого хода">Спросить Claude</button>`
   : "");
+// A long comment away from the current move shows two lines (a click opens it); the current move's comment is whole.
+const CLIP_AT = 140;
 function commentHtml(n, cur) {
-  return n.comment ? `<span class="cmt rich${n.id === cur ? " active-c" : ""}">${md(n.comment)}</span>` : "";
+  if (!n.comment) return "";
+  const clip = n.id !== cur && n.comment.length > CLIP_AT ? " clip" : "";
+  return `<span class="cmt rich${n.id === cur ? " active-c" : ""}${clip}"${clip ? ' title="Показать весь комментарий"' : ""}>${md(n.comment)}</span>`;
 }
+document.addEventListener("click", (e) => {
+  const c = e.target.closest(".tview .cmt.clip");
+  if (!c || e.target.closest(".mvl, .sqr, a, button")) return;
+  c.classList.toggle("open");
+});
 
-// Folded branches, per tree (a board by its id, other trees by their start position), kept across
-// restarts. A folded branch shows only its first move; stepping onto a move inside it opens it again.
-const FOLDED = (() => { try { return JSON.parse(localStorage.getItem("tree.folded") || "{}"); } catch { return {}; } })();
+// Folded side lines, per tree (a board by its id, other trees by their start position), kept across restarts:
+// line id -> 1 open / 0 folded, set by the user (▸ ▾, «ещё N ходов», the move menu) or by stepping into a line.
+// A line nobody set: folded in a big tree — only its first move shows — open in a small one. A folded line opens
+// when the current move goes into it, and stays open.
+const FOLD_BIG = 30; // moves in a tree from which its side lines start folded
+const FOLDS = (() => { try { return JSON.parse(localStorage.getItem("tree.fold2") || "{}"); } catch { return {}; } })();
 const foldShown = new Map(); // tree → the move that was current at its last render
-let fold = null; // the tree being rendered: {key, set, moved, dirty}
-const foldSet = (key) => new Set(FOLDED[key] || []);
-function saveFold(key, set) {
-  if (set.size) FOLDED[key] = [...set]; else delete FOLDED[key];
-  const keys = Object.keys(FOLDED);
-  if (keys.length > 300) delete FOLDED[keys[0]];
-  try { localStorage.setItem("tree.folded", JSON.stringify(FOLDED)); } catch {}
+let fold = null; // the tree being rendered: {key, map, moved, dirty, big}
+const foldMap = (key) => ({ ...(FOLDS[key] || {}) });
+function saveFold(key, map) {
+  if (Object.keys(map).length) FOLDS[key] = map; else delete FOLDS[key];
+  const keys = Object.keys(FOLDS);
+  if (keys.length > 300) delete FOLDS[keys[0]];
+  try { localStorage.setItem("tree.fold2", JSON.stringify(FOLDS)); } catch {}
 }
 const hasNode = (n, id) => n.children.some((c) => c.id === id || hasNode(c, id));
 const countNodes = (n) => n.children.reduce((k, c) => k + 1 + countNodes(c), 0);
@@ -1451,25 +1463,25 @@ function plural(k, one, few, many) {
   const a = k % 10, b = k % 100;
   return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
 }
-function setFolded(line, set, on) {
+function setFolded(line, map, on) {
   line.classList.toggle("folded", on);
   line.querySelector(":scope > .tg")?.setAttribute("aria-expanded", String(!on));
-  if (on) set.add(line.dataset.fold); else set.delete(line.dataset.fold);
+  map[line.dataset.fold] = on ? 0 : 1;
 }
-// fold or open every branch of a tree view (right-click menu)
+// fold or open every side line of a tree view (the move menu)
 function foldAll(tv, on) {
   if (!tv) return;
-  const set = foldSet(tv.dataset.tree);
-  for (const l of $$(".line[data-fold]", tv)) setFolded(l, set, on);
-  saveFold(tv.dataset.tree, set);
+  const map = foldMap(tv.dataset.tree);
+  for (const l of $$(".line[data-fold]", tv)) setFolded(l, map, on);
+  saveFold(tv.dataset.tree, map);
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest(".tview .tg, .tview .more");
   if (!b) return;
   const line = b.closest(".line"), key = b.closest(".tview").dataset.tree;
-  const set = foldSet(key);
-  setFolded(line, set, !line.classList.contains("folded"));
-  saveFold(key, set);
+  const map = foldMap(key);
+  setFolded(line, map, !line.classList.contains("folded"));
+  saveFold(key, map);
 });
 
 // A side line goes in parentheses (Lichess "renderInlined") only when it is short and plain: the only
@@ -1490,12 +1502,13 @@ function lineHtml(n, cur) {
   // the first move stays outside the row's body (a folded branch shows only it): its frame and the body's join up
   if (lead && body.startsWith('<span class="lrun cont-l">')) head = head.replace('class="lrun"', 'class="lrun cont-r"');
   if (!body.trim()) return `<div class="line">${head}</div>`;
-  let folded = !!fold?.set.has(n.id);
-  if (folded && fold.moved && hasNode(n, cur)) { fold.set.delete(n.id); fold.dirty = true; folded = false; }
+  const set = fold?.map[n.id];
+  let folded = set !== undefined ? !set : !!fold?.big;
+  if (folded && fold.moved && (n.id === cur || hasNode(n, cur))) { fold.map[n.id] = 1; fold.dirty = true; folded = false; }
   const k = countNodes(n);
   const more = k ? `ещё ${k} ${plural(k, "ход", "хода", "ходов")}` : "комментарий";
   return `<div class="line${folded ? " folded" : ""}" data-fold="${n.id}">` +
-    `<button type="button" class="tg" aria-expanded="${!folded}" title="Свернуть или развернуть вариант"></button>` +
+    `<button type="button" class="tg" aria-expanded="${!folded}" aria-label="Свернуть или развернуть вариант" title="Свернуть или развернуть вариант"></button>` +
     `${head}<button type="button" class="more" title="Развернуть вариант">… ${more}</button><span class="body">${body}</span></div>`;
 }
 function linesHtml(nodes, cur) {
@@ -1527,7 +1540,7 @@ function boardTreeHtml(root, key, tags = null) {
 }
 function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
-  fold = { key, set: foldSet(key), moved: foldShown.get(key) !== cur, dirty: false };
+  fold = { key, map: foldMap(key), moved: foldShown.get(key) !== cur, dirty: false, big: countNodes(root) > FOLD_BIG };
   treeLine = lineIds(root, cur);
   let h = `<div class="tview" data-tree="${esc(key)}">`;
   let node = root;
@@ -1548,7 +1561,7 @@ function treeHtml(root, cur, key = root.fen || root.id) {
     node = main;
   }
   foldShown.set(key, cur);
-  if (fold.dirty) saveFold(key, fold.set);
+  if (fold.dirty) saveFold(key, fold.map);
   fold = null;
   treeLine = null;
   return `${h}</div>`;
@@ -1604,7 +1617,7 @@ function cevalHtml() {
     const nums = numLabels(r.fen, l.san.length);
     const moves = l.san.slice(0, 12).map((s, i) => `${nums[i].endsWith(".") || i === 0 ? `<span class="num">${nums[i]}</span>` : ""}<span class="pvm" data-pv="${li}" data-i="${i}">${esc(s)}</span>`).join(" ");
     return `<div class="pv"><strong>${evalText(l)}</strong><span>${moves}</span></div>`;
-  }).join("");
+  }).join("") || (r?.game_over ? "" : '<div class="pv">&nbsp;</div>'.repeat(3)); // room for the lines while they come: the tree below does not jump
   return `<div class="ceval" id="ceval">${head}${lines}</div>`;
 }
 
