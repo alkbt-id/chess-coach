@@ -200,6 +200,43 @@ for (const t of ["mousedown", "touchstart"]) {
   $("#board").addEventListener(t, () => cg.state.dom.bounds.clear(), { capture: true, passive: true });
 }
 
+// Touch screens: arrows drawn with a finger. A mouse draws with the right button (chessground), but to chessground a
+// finger always moves pieces; the pencil under the board turns the board into a drawing surface until it is pressed
+// again: a drag draws an arrow, a tap rings a square, the same one again takes it away (as with the mouse). These
+// listeners come before the swipe's and stop the touch there, so nothing moves and no page turns while drawing.
+let drawMode = false;
+const drawTouch = { from: null };
+function setDrawMode(on) {
+  drawMode = on;
+  const b = $("#draw-btn");
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", String(on));
+  $("#board-wrap").classList.toggle("drawing", on);
+}
+$("#draw-btn").addEventListener("click", () => setDrawMode(!drawMode));
+const keyAtTouch = (t) => { cg.state.dom.bounds.clear(); return cg.getKeyAtDomPos([t.clientX, t.clientY]); };
+function drawStop(e) { e.preventDefault(); e.stopImmediatePropagation(); }
+$("#board-wrap").addEventListener("touchstart", (e) => {
+  if (!drawMode) return;
+  drawStop(e);
+  drawTouch.from = e.touches.length === 1 ? keyAtTouch(e.touches[0]) : null;
+}, { capture: true, passive: false });
+$("#board-wrap").addEventListener("touchmove", (e) => { if (drawMode) drawStop(e); }, { capture: true, passive: false });
+$("#board-wrap").addEventListener("touchend", (e) => {
+  if (!drawMode) return;
+  drawStop(e);
+  const from = drawTouch.from, t = e.changedTouches[0];
+  drawTouch.from = null;
+  const to = t && keyAtTouch(t);
+  if (!from || !to) return;
+  const shape = from === to ? { orig: from, brush: "green" } : { orig: from, dest: to, brush: "green" };
+  const same = (s) => s.orig === shape.orig && (s.dest || null) === (shape.dest || null);
+  const shapes = cg.state.drawable.shapes;
+  userShapes = shapes.some(same) ? shapes.filter((s) => !same(s)) : [...shapes, shape];
+  cg.setShapes(userShapes);
+  reportView(); // Claude sees the user's arrows, as with the mouse
+}, { capture: true, passive: false });
+
 // One-finger swipe across the board (the iPad): right to left = next move, left to right = previous, like turning a
 // page. A press that starts a move (a piece that can move, or a target of the selected piece) stays a move.
 const swipe = { start: null };
@@ -1262,12 +1299,17 @@ function lineIds(root, cur) {
   if (rep.trial?.base !== cur) for (let n = at.children[0]; n; n = n.children[0]) ids.add(n.id); // a tried line goes elsewhere
   return ids;
 }
+// the ⋯ of the current move: its menu without a right click (set only while a board's own tree renders)
+let menuAt = null;
+const menuBtn = (n) => (n.id === menuAt
+  ? `<button type="button" class="mv-menu" data-menu="${n.id}" aria-label="Действия с ходом" title="Действия с ходом"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>`
+  : "");
 function treeMove(n, cur) {
-  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}</span>`;
+  return `<span class="tm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${labelHtml(n)}${menuBtn(n)}</span>`;
 }
 function moveHtml(n, cur, force) { // the number (when due) and the move
   const num = n.num.endsWith(".") || force ? `<span class="num">${esc(n.num)}</span>` : "";
-  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}</span>`;
+  return `${num}<span class="vm${n.id === cur ? " active" : ""}${n.by === "user" ? " user" : ""}" data-id="${n.id}">${esc(n.san)}${glyphHtml(n)}${menuBtn(n)}</span>`;
 }
 function inlineMove(n, cur, force) {
   return `${moveHtml(n, cur, force)}${labelHtml(n)}${askHtml(n)} `;
@@ -1390,6 +1432,11 @@ function seqHtml(first, cur, rest = false, lead = false) {
   }
   return row.end();
 }
+// a board's own tree in «Разбор» / «Репертуар»: its current move gets the ⋯ of its menu
+function boardTreeHtml(root, key) {
+  menuAt = study.node;
+  try { return treeHtml(root, study.node, key); } finally { menuAt = null; }
+}
 function treeHtml(root, cur, key = root.fen || root.id) {
   if (!root.children.length) return "";
   fold = { key, set: foldSet(key), moved: foldShown.get(key) !== cur, dirty: false };
@@ -1458,10 +1505,12 @@ function evalText(l) {
   return (l.cp_white >= 0 ? "+" : "") + (l.cp_white / 100).toFixed(2);
 }
 
+// The engine block, with its on/off switch in the head (as on Lichess): off, only the switch and the name stay.
+const engineSwitch = () => `<button type="button" class="sw" role="switch" id="engine-sw" aria-checked="${study.engine}" aria-label="Stockfish" title="Stockfish (L)"></button>`;
 function cevalHtml() {
-  if (!study.engine) return "";
+  if (!study.engine) return `<div class="ceval off" id="ceval"><div class="ceval-head">${engineSwitch()}<span>Stockfish</span></div></div>`;
   const r = ceval.fen === shownFen ? ceval.res : null;
-  const head = `<div class="ceval-head"><b>${r?.lines?.length ? evalText(r.lines[0]) : r?.game_over || "…"}</b><span>Stockfish · ${ceval.deep ? "глубже" : "быстро"}</span></div>`;
+  const head = `<div class="ceval-head">${engineSwitch()}<b>${r?.lines?.length ? evalText(r.lines[0]) : r?.game_over || "…"}</b><span>Stockfish · ${ceval.deep ? "глубже" : "быстро"}</span></div>`;
   const lines = (r?.lines || []).map((l, li) => {
     const nums = numLabels(r.fen, l.san.length);
     const moves = l.san.slice(0, 12).map((s, i) => `${nums[i].endsWith(".") || i === 0 ? `<span class="num">${nums[i]}</span>` : ""}<span class="pvm" data-pv="${li}" data-i="${i}">${esc(s)}</span>`).join(" ");
@@ -1503,8 +1552,9 @@ function studyPanelHtml() {
   // one row: the tabs of this chat's boards (or of the boards without a chat) — switching them never changes the chat;
   // «Все доски» reaches every board, and a board of another chat comes with its chat
   askAt = curNode()?.by === "user" && !(study.autoAsk && discussed(sc)) && !isLive() ? study.node : null;
+  menuAt = study.node;
   const tree = treeHtml(sc.root, study.node, sc.id);
-  askAt = null;
+  askAt = menuAt = null;
   const where = chatOf(sc) ? "чата" : "без чата";
   const tabs = `<div class="board-tabs" role="tablist" aria-label="Доски ${where}"><span class="bt-label">Доски ${where}:</span>
       ${scopeBoards(sc).map((x) => `<button type="button" class="btab${x === sc ? " on" : ""}" role="tab" aria-selected="${x === sc}" data-board="${esc(x.id)}" title="${esc(x.title)}">${esc(x.title)}</button>`).join("")}
@@ -1603,6 +1653,11 @@ $("#panel").addEventListener("click", async (e) => {
   } else if (t.classList.contains("pvm")) {
     const l = ceval.res?.lines?.[Number(t.dataset.pv)];
     if (l) openPreview(playLine(ceval.res.fen, l.uci), Number(t.dataset.i), "Линия Stockfish");
+  } else if (t.id === "engine-sw") {
+    setEngine(!study.engine);
+  } else if (t.dataset.menu) {
+    const r = t.getBoundingClientRect();
+    openMoveMenu(t.dataset.menu, r.left, r.bottom + 4);
   } else if (t.dataset.board) {
     if (t.dataset.board !== study.id) setScene(t.dataset.board);
   } else if (t.id === "ask-line") {
@@ -1653,25 +1708,69 @@ $("#panel").addEventListener("submit", async (e) => {
   } catch (err) { setStatus(String(err.message), true); }
 });
 
-// right-click menu on tree moves
+// A tree move's menu: right click, a long press (touch screens have no right click) or the ⋯ on the current move.
+function openMoveMenu(id, x, y) {
+  if (mode !== "study") return;
+  const sc = scene();
+  const n = sc && tindex(sc).get(id)?.n;
+  if (!n) return;
+  const ctx = $("#ctx");
+  ctx.innerHTML = `<div class="menu-head">Ход <b>${esc(n.num)}${esc(n.san)}</b></div>
+    <button type="button" class="mi" data-act="promote">Сделать главной линией</button>
+    ${sc.rep ? `<button type="button" class="mi" data-act="section">Сделать разделом</button>` : ""}
+    <button type="button" class="mi" data-act="ask"><span class="spark">✦</span>Спросить Claude про эту позицию</button>
+    <button type="button" class="mi" data-act="fen">Скопировать FEN</button>
+    ${$(".tview .line[data-fold]", $("#panel")) ? `<button type="button" class="mi" data-act="fold">Свернуть все варианты</button>
+    <button type="button" class="mi" data-act="unfold">Развернуть все варианты</button>` : ""}
+    <div class="menu-sep"></div>
+    <button type="button" class="mi danger" data-act="delete">Удалить с этого хода</button>`;
+  ctx.dataset.id = id;
+  ctx.hidden = false;
+  const w = ctx.offsetWidth, h = ctx.offsetHeight;
+  ctx.style.left = `${Math.max(8, Math.min(x, innerWidth - w - 8))}px`;
+  ctx.style.top = `${Math.max(8, Math.min(y, innerHeight - h - 8))}px`;
+}
 $("#panel").addEventListener("contextmenu", (e) => {
   const t = e.target.closest(".tm[data-id], .vm[data-id]");
   if (!t || mode !== "study") return;
   e.preventDefault();
-  const ctx = $("#ctx");
-  ctx.innerHTML = `${scene()?.rep ? `<button type="button" data-act="section">Сделать разделом</button>` : ""}<button type="button" data-act="promote">Сделать главной линией</button>
-    <button type="button" data-act="ask">Спросить Claude про эту позицию</button>
-    <button type="button" data-act="fen">Скопировать FEN</button>
-    ${$(".tview .line[data-fold]", $("#panel")) ? `<button type="button" data-act="fold">Свернуть все варианты</button>
-    <button type="button" data-act="unfold">Развернуть все варианты</button>` : ""}
-    <button type="button" data-act="delete" class="danger">Удалить с этого хода</button>`;
-  ctx.dataset.id = t.dataset.id;
-  ctx.hidden = false;
-  ctx.style.left = `${Math.min(e.clientX, innerWidth - 220)}px`;
-  ctx.style.top = `${Math.min(e.clientY, innerHeight - 160)}px`;
+  openMoveMenu(t.dataset.id, e.clientX, e.clientY);
 });
+// long press on a move: the same menu; the click that follows the press must not go to the move or close the menu
+const press = { timer: 0, x: 0, y: 0, fired: false, at: 0 };
+$("#panel").addEventListener("touchstart", (e) => {
+  const t = e.target.closest(".tm[data-id], .vm[data-id]");
+  clearTimeout(press.timer);
+  press.fired = false;
+  if (!t || e.touches.length !== 1 || mode !== "study") return;
+  const p = e.touches[0];
+  Object.assign(press, { x: p.clientX, y: p.clientY });
+  press.timer = setTimeout(() => {
+    press.fired = true;
+    press.at = Date.now();
+    navigator.vibrate?.(10);
+    openMoveMenu(t.dataset.id, press.x, press.y + 12);
+  }, 500);
+}, { passive: true });
+$("#panel").addEventListener("touchmove", (e) => {
+  const p = e.touches[0];
+  if (p && Math.hypot(p.clientX - press.x, p.clientY - press.y) > 10) clearTimeout(press.timer);
+}, { passive: true });
+$("#panel").addEventListener("touchend", (e) => {
+  clearTimeout(press.timer);
+  if (press.fired) e.preventDefault(); // no click after a long press
+  press.fired = false;
+}, { passive: false });
+$("#panel").addEventListener("touchcancel", () => clearTimeout(press.timer), { passive: true });
+// in case a browser still sends the click of the long press: swallow it, it would go to the move and close the menu
+document.addEventListener("click", (e) => {
+  if (Date.now() - press.at > 600 || e.target.closest("#ctx")) return;
+  press.at = 0;
+  e.stopPropagation();
+  e.preventDefault();
+}, { capture: true });
 $("#ctx").addEventListener("click", async (e) => {
-  const b = e.target.closest("button");
+  const b = e.target.closest("button[data-act]");
   if (!b) return;
   const ctx = $("#ctx");
   const id = ctx.dataset.id;
@@ -1694,7 +1793,7 @@ $("#ctx").addEventListener("click", async (e) => {
     } catch (err) { setStatus(String(err.message), true); }
   }
 });
-document.addEventListener("click", (e) => { if (!e.target.closest("#ctx")) $("#ctx").hidden = true; });
+document.addEventListener("click", (e) => { if (!e.target.closest("#ctx, .mv-menu")) $("#ctx").hidden = true; });
 
 // =====================================================================
 // PUZZLES — positions from the user's games
@@ -2475,8 +2574,8 @@ function renderChatTabs() {
   reportShownChat();
   $("#chat-tabs").innerHTML = openChats().map((c) =>
     `<div class="ctab${c.id === ch.cur ? " on" : ""}" data-chat="${c.id}" title="${esc(chatLabel(c, true))}" role="tab">${c.busy ? '<span class="dot"></span>' : ""}<span class="ctitle">${esc(chatLabel(c))}</span><button type="button" class="cx" data-close="${c.id}" title="Закрыть вкладку">×</button></div>`).join("")
-    + `<button type="button" class="ctab add" id="chat-new" title="Новый чат">＋</button>`
-    + `<button type="button" class="ctab hist" id="chat-hist" title="Все чаты, в том числе закрытые">Все чаты</button>`;
+    + `<button type="button" class="ctab add" id="chat-new" title="Новый чат" aria-label="Новый чат">＋</button>`
+    + `<button type="button" class="ctab hist" id="chat-hist" title="Все чаты, в том числе закрытые" aria-label="Все чаты"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></button>`;
 }
 
 async function closeChatTab(id) {
@@ -2513,15 +2612,32 @@ function renderChatsPop() {
   pop.style.right = "auto";
 }
 
+// The chat's model and effort: a chip at the bottom of the chat; it opens a menu with both and «Удалить чат…»
+// (deleting asks again inside the same menu)
+const modelName = (id) => ch.models.find((m) => m.id === id)?.name || id;
 function renderChatOpts() {
   const c = curChat();
-  $("#chat-opts").hidden = !c;
-  if (!c) return;
-  $("#chat-model").innerHTML = ch.models.map((m) => `<option value="${m.id}"${m.id === c.model ? " selected" : ""}>${esc(m.name)}</option>`).join("");
-  $("#chat-effort").innerHTML = ch.efforts.map((e) => `<option value="${e}"${e === c.effort ? " selected" : ""}>effort: ${e}</option>`).join("");
-  const del = $("#chat-del");
-  del.textContent = ch.delConfirm ? "точно удалить?" : "удалить чат";
-  del.classList.toggle("confirm", ch.delConfirm);
+  $("#chat-model-btn").hidden = !c;
+  if (c) $("#chat-model-text").textContent = `${modelName(c.model)} · ${c.effort}`;
+  renderModelPop();
+}
+function renderModelPop() {
+  const pop = $("#model-pop");
+  const c = curChat();
+  if (!c) pop.hidden = true;
+  if (pop.hidden) return;
+  pop.innerHTML = ch.delConfirm
+    ? `<div class="menu-confirm"><b>Удалить этот чат?</b><span>Разговор пропадёт; его доски останутся в «Разборе».</span>
+        <div class="actions"><button type="button" class="btn danger" data-chat-del="yes">Удалить</button><button type="button" class="btn quiet" data-chat-del="no">Отмена</button></div></div>`
+    : `<div class="menu-head">Модель</div>
+      ${ch.models.map((m) => `<button type="button" class="mi" data-model="${m.id}" aria-checked="${m.id === c.model}" role="menuitemradio">${esc(m.name)}${m.id === c.model ? '<span class="k">✓</span>' : ""}</button>`).join("")}
+      <div class="menu-head">Сколько думать</div>
+      <div class="seg">${ch.efforts.map((e) => `<button type="button" data-effort="${e}" class="${e === c.effort ? "on" : ""}" aria-pressed="${e === c.effort}">${e}</button>`).join("")}</div>
+      <div class="menu-sep"></div>
+      <button type="button" class="mi danger" data-chat-del="ask">Удалить чат…</button>`;
+  const r = $("#chat-model-btn").getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+  pop.style.top = `${Math.max(8, r.top - pop.offsetHeight - 6)}px`;
 }
 
 function entryHtml(e) {
@@ -2684,6 +2800,7 @@ function setChatOpen(open) {
   ch.open = open;
   $("#layout").classList.toggle("no-chat", !open || isLive());
   $("#chat-toggle").classList.toggle("on", open);
+  $("#chat-toggle").setAttribute("aria-pressed", String(open));
   try { localStorage.setItem("chat.open", open ? "1" : "0"); } catch {}
   layout();
   reportShownChat();
@@ -2727,17 +2844,34 @@ $("#chat-text").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chat-form").requestSubmit(); }
 });
 $("#chat-text").addEventListener("input", () => { autosize(); updateSendButton(); });
-$("#chat-model").addEventListener("change", (e) => post(`/api/chat/${ch.cur}/config`, { model: e.target.value }));
-$("#chat-effort").addEventListener("change", (e) => post(`/api/chat/${ch.cur}/config`, { effort: e.target.value }));
-$("#chat-del").addEventListener("click", async () => {
-  if (!ch.delConfirm) { ch.delConfirm = true; renderChatOpts(); setTimeout(() => { ch.delConfirm = false; renderChatOpts(); }, 3000); return; }
-  const id = ch.cur;
+$("#chat-model-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = $("#model-pop");
+  pop.hidden = !pop.hidden;
   ch.delConfirm = false;
-  await post(`/api/chat/${id}/delete`);
-  ch.entries.delete(id);
-  ch.list = ch.list.filter((c) => c.id !== id);
-  // in «Разбор» the board stays, now without a chat; elsewhere the next chat opens
-  openChat(mode === "study" ? null : ch.list[0]?.id || null, { follow: false });
+  renderModelPop();
+});
+$("#model-pop").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const b = e.target.closest("button");
+  const c = curChat();
+  if (!b || !c) return;
+  if (b.dataset.model) { c.model = b.dataset.model; post(`/api/chat/${c.id}/config`, { model: c.model }); renderChatOpts(); }
+  else if (b.dataset.effort) { c.effort = b.dataset.effort; post(`/api/chat/${c.id}/config`, { effort: c.effort }); renderChatOpts(); }
+  else if (b.dataset.chatDel === "ask" || b.dataset.chatDel === "no") { ch.delConfirm = b.dataset.chatDel === "ask"; renderModelPop(); }
+  else if (b.dataset.chatDel === "yes") {
+    const id = c.id;
+    ch.delConfirm = false;
+    $("#model-pop").hidden = true;
+    await post(`/api/chat/${id}/delete`);
+    ch.entries.delete(id);
+    ch.list = ch.list.filter((x) => x.id !== id);
+    // in «Разбор» the board stays, now without a chat; elsewhere the next chat opens
+    openChat(mode === "study" ? null : ch.list[0]?.id || null, { follow: false });
+  }
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#model-pop, #chat-model-btn")) { $("#model-pop").hidden = true; ch.delConfirm = false; }
 });
 $("#chat-toggle").addEventListener("click", () => setChatOpen(!ch.open));
 
@@ -2795,17 +2929,62 @@ function onChatEvent(ev) {
 // =====================================================================
 // JOBS — fetch / analyse games, build puzzles
 // =====================================================================
-const jobsState = { list: [], kinds: {} };
+// The chip in the header shows only while a job runs, then its result for a few seconds; a failure stays until the
+// log is opened. Starting a job: the ⋯ menu in the header (or ask Claude).
+const jobsState = { list: [], kinds: {}, endedAt: 0, failSeen: null };
 const JOB_STATUS = { running: "идёт", done: "готово", failed: "ошибка", cancelled: "остановлено" };
+const JOB_SHOW_MS = 8000;
 
 function renderJobChip() {
   const run = jobsState.list.find((j) => j.status === "running");
   const last = run || jobsState.list[jobsState.list.length - 1];
   const chip = $("#job-chip");
+  const failed = last?.status === "failed" && jobsState.failSeen !== last.id;
+  chip.hidden = !(run || failed || (last && Date.now() - jobsState.endedAt < JOB_SHOW_MS));
   chip.classList.toggle("running", !!run);
-  chip.classList.toggle("failed", last?.status === "failed");
+  chip.classList.toggle("failed", !!failed);
   const tail = last?.tail?.filter((l) => l.trim()).slice(-1)[0] || "";
-  $("#job-text").textContent = run ? `${run.title}: ${tail}` : last ? `${last.title}: ${JOB_STATUS[last.status] || last.status}` : "Обработка";
+  $("#job-text").textContent = run ? `${run.title}${tail ? `: ${tail}` : ""}` : last ? `${last.title}: ${JOB_STATUS[last.status] || last.status}` : "";
+}
+
+// ⋯ in the header: the jobs over the user's games («Обновить всё» first) and their log
+function renderAppMenu() {
+  const menu = $("#app-menu");
+  if (menu.hidden) return;
+  const run = jobsState.list.some((j) => j.status === "running");
+  const kinds = Object.entries(jobsState.kinds).sort(([a], [b]) => (b === "update") - (a === "update"));
+  menu.innerHTML = `<div class="menu-head">Мои партии</div>
+    ${kinds.map(([k, t]) => `<button type="button" class="mi" data-job="${k}"${run ? " disabled" : ""}>${esc(t)}</button>`).join("")}
+    <div class="menu-sep"></div>
+    <button type="button" class="mi" data-joblog="1"${jobsState.list.length ? "" : " disabled"}>Журнал обработки</button>`;
+  const r = $("#app-menu-btn").getBoundingClientRect();
+  menu.style.top = `${r.bottom + 6}px`;
+  menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
+}
+$("#app-menu-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const m = $("#app-menu");
+  m.hidden = !m.hidden;
+  $("#jobs-pop").hidden = true;
+  renderAppMenu();
+});
+$("#app-menu").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const b = e.target.closest("button");
+  if (!b || b.disabled) return;
+  $("#app-menu").hidden = true;
+  if (b.dataset.job) await post("/api/job", { kind: b.dataset.job }).catch((err) => setStatus(String(err.message), true));
+  else if (b.dataset.joblog) openJobsPop();
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#app-menu, #app-menu-btn")) $("#app-menu").hidden = true; });
+
+function openJobsPop() {
+  const pop = $("#jobs-pop");
+  pop.hidden = false;
+  const last = jobsState.list[jobsState.list.length - 1];
+  if (last?.status === "failed") jobsState.failSeen = last.id;
+  renderJobsPop();
+  renderJobChip();
 }
 
 function renderJobsPop() {
@@ -2814,13 +2993,16 @@ function renderJobsPop() {
   const run = jobsState.list.find((j) => j.status === "running");
   const last = run || jobsState.list[jobsState.list.length - 1];
   pop.innerHTML = `<h3>Обработка партий</h3>
-    <div class="row">${Object.entries(jobsState.kinds).map(([k, t]) => `<button type="button" class="btn small" data-job="${k}" ${run ? "disabled" : ""}>${esc(t)}</button>`).join("")}</div>
-    ${last ? `<div><b>${esc(last.title)}</b> — ${esc(JOB_STATUS[last.status] || last.status)}, ${last.seconds} с
-      ${run ? `<button type="button" class="link-btn" data-stop="${run.id}">остановить</button>` : ""}</div><pre>${esc((last.tail || []).join("\n"))}</pre>`
-    : `<p class="hint">Пока ничего не запускалось. Можно попросить Claude в чате.</p>`}`;
+    ${last ? `<div><b>${esc(last.title)}</b> — ${esc(JOB_STATUS[last.status] || last.status)}, ${last.seconds} с</div>
+      <pre>${esc((last.tail || []).join("\n"))}</pre>
+      ${run ? `<div class="row"><button type="button" class="btn" data-stop="${run.id}">Остановить</button></div>` : ""}`
+    : `<p class="hint">Пока ничего не запускалось. Запустить — в меню ⋯ вверху или попросить Claude в чате.</p>`}`;
 }
 
-$("#job-chip").addEventListener("click", (e) => { e.stopPropagation(); const pop = $("#jobs-pop"); pop.hidden = !pop.hidden; renderJobsPop(); });
+$("#job-chip").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if ($("#jobs-pop").hidden) openJobsPop(); else $("#jobs-pop").hidden = true;
+});
 $("#jobs-pop").addEventListener("click", async (e) => {
   e.stopPropagation();
   const b = e.target.closest("button");
@@ -3352,7 +3534,8 @@ function applyLock() {
   if (on && !was) {
     closePreviewSilently();
     hideHover();
-    $("#ctx").hidden = $("#jobs-pop").hidden = $("#chats-pop").hidden = true;
+    $("#ctx").hidden = $("#jobs-pop").hidden = $("#chats-pop").hidden = $("#app-menu").hidden = $("#model-pop").hidden = true;
+    setDrawMode(false);
     clearTimeout(askTimer);
     clearTimeout(ceval.timer);
     ceval.seq++;
@@ -3488,7 +3671,7 @@ function repTocHtml() {
     <div class="rep-actions"><button type="button" class="btn small" id="rep-new">＋ Новый дебют</button>
       <button type="button" class="btn small" id="rep-seed" title="Добавить разделы для дебютов, которые встретились в новых партиях">Обновить из партий</button></div>
     ${rep.form ? repFormHtml() : ""}
-    ${boardLine}${repTrialHtml(true)}`;
+    ${cevalHtml()}${boardLine}${repTrialHtml(true)}`;
 }
 
 function repFormHtml() {
@@ -3536,10 +3719,10 @@ function repSectionHtml(s) {
   if (onTree && node) {
     body = `${cevalHtml()}${node.comment ? `<div class="rich lead">${md(node.comment)}</div>` : ""}
       ${repTrialHtml(false)}
-      ${treeHtml(node, study.node) || `<p class="hint">После этой позиции ходов пока нет. Сделай ходы на доске и нажми «Записать в репертуар» — или начни урок: Claude разберёт раздел и запишет ходы, которые ты выберешь.</p>`}`;
+      ${boardTreeHtml(node) || `<p class="hint">После этой позиции ходов пока нет. Сделай ходы на доске и нажми «Записать в репертуар» — или начни урок: Claude разберёт раздел и запишет ходы, которые ты выберешь.</p>`}`;
   } else if (sc) {
     body = `<h2 class="rep-sub">${esc(sc.title)}</h2>${cevalHtml()}${sc.root.comment ? `<div class="rich lead">${md(sc.root.comment)}</div>` : ""}
-      ${treeHtml(sc.root, study.node) || `<p class="hint">Ходов пока нет.</p>`}`;
+      ${boardTreeHtml(sc.root) || `<p class="hint">Ходов пока нет.</p>`}`;
   }
   const foot = `<div class="rep-actions">
       <button type="button" class="link-btn" id="rep-rename-btn">переименовать</button>
@@ -4417,14 +4600,14 @@ $("#panel").addEventListener("change", (e) => {
 // =====================================================================
 // modes, keys, server events
 // =====================================================================
+// a mode's badge: only what asks for the user's action — positions and puzzles due, a live game (empty = hidden)
 function updateCounts() {
   $("#play-count").textContent = isLive() ? "●" : "";
   const repDue = drillDueIn({});
-  $("#rep-count").textContent = repDue ? `· ${repDue}` : "";
-  $("#scene-count").textContent = study.scenes.filter((s) => !s.rep).length || "";
+  $("#rep-count").textContent = repDue || "";
   const now = Date.now();
   const due = pz.list.filter((p) => pz.prog[p.id] && pz.prog[p.id].due <= now).length;
-  $("#due-count").textContent = due ? `· ${due}` : "";
+  $("#due-count").textContent = due || "";
 }
 
 // follow: which side wins when «Разбор» opens — "board" (a board was just chosen: its chat comes) or, by default,
@@ -4439,10 +4622,8 @@ function setMode(m, { save = true, follow = "chat" } = {}) {
   if (rep.on) m = "study";
   mode = m;
   $$(".mode").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === view)));
-  $("#nav").style.visibility = m === "study" || m === "play" ? "visible" : "hidden";
-  $("#engine-switch").style.visibility = m === "study" ? "visible" : "hidden";
-  $("#ask-switch").style.visibility = m === "study" && !rep.on ? "visible" : "hidden"; // the repertoire only tries moves
-  $("#foot").hidden = m === "puzzle"; // nothing left there for puzzles (the flip button sits under the board)
+  $("#nav").classList.toggle("no-moves", m === "puzzle"); // a puzzle has no moves to step through: only flip (and the pencil)
+  $("#ask-switch").hidden = !(m === "study" && !rep.on); // the repertoire only tries moves
   if (rep.on) repEnter();
   else if (m === "study") {
     if (scene()?.rep) { study.id = activeBoard(ch.cur)?.id ?? null; study.node = "root"; } // the repertoire stays in its mode
@@ -4458,7 +4639,6 @@ $("#nav").addEventListener("click", (e) => {
   const b = e.target.closest("[data-nav]");
   if (b) (mode === "play" ? playStep : studyStep)(b.dataset.nav);
 });
-$("#engine-on").addEventListener("change", (e) => setEngine(e.target.checked));
 $("#auto-ask").addEventListener("change", (e) => {
   study.autoAsk = e.target.checked;
   if (!study.autoAsk) clearTimeout(askTimer);
@@ -4471,9 +4651,8 @@ function swipeStep(dir) { // what ← / → do in each mode
   else if (mode === "study") studyStep(dir);
 }
 
-function setEngine(on) {
+function setEngine(on) { // the switch sits in the engine block's head (cevalHtml)
   study.engine = on;
-  $("#engine-on").checked = on;
   http.send("PUT", "/api/settings", { engine: on }).catch(() => {});
   if (mode === "study") renderStudy();
 }
@@ -4492,8 +4671,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (promo) { closePromotion(); return; }
     $("#ctx").hidden = true;
-    $("#jobs-pop").hidden = true;
-    $("#chats-pop").hidden = true;
+    $("#jobs-pop").hidden = $("#chats-pop").hidden = $("#app-menu").hidden = $("#model-pop").hidden = true;
+    if (drawMode) setDrawMode(false);
     if (preview) { closePreview(); return; }
   }
   if (e.target.closest("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -4577,9 +4756,15 @@ async function onEvent(ev) {
     }
     case "job": {
       const i = jobsState.list.findIndex((j) => j.id === ev.job.id);
+      const was = i >= 0 ? jobsState.list[i].status : null;
       if (i >= 0) jobsState.list[i] = ev.job; else jobsState.list.push(ev.job);
+      if (was === "running" && ev.job.status !== "running") { // just ended: its result shows for a few seconds
+        jobsState.endedAt = Date.now();
+        setTimeout(renderJobChip, JOB_SHOW_MS + 50);
+      }
       renderJobChip();
       renderJobsPop();
+      renderAppMenu();
       if (ev.job.kind === "fetch_games" && ev.job.status !== "running" && play.hist) { play.hist = null; renderPlayPanel(); } // new games in the list
       if (ev.job.kind === "fetch_games" && ev.job.status === "done") { rep.games = null; if (rep.on && mode === "study" && !rep.drill) renderStudyPanel(); }
       break;
@@ -4636,7 +4821,6 @@ async function init() {
     study.engine = !!s.settings.engine;
     study.autoAsk = s.settings.autoAsk !== false;
     $("#auto-ask").checked = study.autoAsk;
-    $("#engine-on").checked = study.engine;
     pz.list = list;
     pz.byId = Object.fromEntries(list.map((p) => [p.id, p]));
     assignRatings(list);
@@ -4650,6 +4834,7 @@ async function init() {
     ch.efforts = s.efforts || [];
     jobsState.list = s.jobs || [];
     jobsState.kinds = s.job_kinds || {};
+    if (jobsState.list.at(-1)?.status === "failed") jobsState.failSeen = jobsState.list.at(-1).id; // an old failure stays in the log
     play.st = s.live || null;
     if (play.st?.game?.playing) play.show = play.st.game.id;
     applyLock();

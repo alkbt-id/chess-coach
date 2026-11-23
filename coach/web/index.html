@@ -18,36 +18,37 @@
 <link rel="stylesheet" href="/static/vendor/board.lichess-brown.css">
 <link rel="stylesheet" href="/static/vendor/pieces.merida.css">
 <!-- ?v=: the iPad keeps static files cached; bump it (here and on app.js below) when app.css or app.js changes -->
-<link rel="stylesheet" href="/static/app.css?v=25">
+<link rel="stylesheet" href="/static/app.css?v=26">
 </head>
 <body>
 <div class="app">
   <header class="top">
     <div class="modes" role="tablist" aria-label="Режим">
-      <button type="button" class="mode" role="tab" data-mode="study" aria-selected="false">Разбор <small id="scene-count"></small></button>
-      <button type="button" class="mode" role="tab" data-mode="rep" aria-selected="false" title="Мой дебютный репертуар: разделы, уроки с Claude, тренировка по памяти">Репертуар <small id="rep-count"></small></button>
-      <button type="button" class="mode" role="tab" data-mode="puzzle" aria-selected="false">Задачи <small id="due-count"></small></button>
-      <button type="button" class="mode" role="tab" data-mode="play" aria-selected="false" title="Партии на Lichess">Игра <small id="play-count"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="study" aria-selected="false">Разбор</button>
+      <button type="button" class="mode" role="tab" data-mode="rep" aria-selected="false" title="Мой дебютный репертуар: разделы, уроки с Claude, тренировка по памяти">Репертуар <small class="badge" id="rep-count" title="Позиций пора повторить"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="puzzle" aria-selected="false">Задачи <small class="badge" id="due-count" title="Задач пора повторить"></small></button>
+      <button type="button" class="mode" role="tab" data-mode="play" aria-selected="false" title="Партии на Lichess">Игра <small class="badge live-dot" id="play-count" title="Идёт партия"></small></button>
     </div>
     <div class="top-right">
       <div class="status" id="status" aria-live="polite"></div>
-      <button type="button" class="job-chip" id="job-chip" title="Обработка партий и задач">⚙︎ <span id="job-text">Обработка</span></button>
-      <button type="button" class="icon wide" id="chat-toggle" title="Показать или скрыть чат">Чат с Claude</button>
+      <!-- shown only while something runs (or just ended); the jobs themselves are in the ⋯ menu -->
+      <button type="button" class="job-chip" id="job-chip" hidden title="Обработка партий: журнал и «остановить»"><span class="spin"></span><span id="job-text"></span></button>
+      <button type="button" class="tbtn" id="chat-toggle" title="Показать или скрыть чат с Claude"><svg class="spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></svg>Claude</button>
+      <button type="button" class="ibtn" id="app-menu-btn" aria-label="Меню: партии с Lichess, отчёт по ошибкам" title="Партии с Lichess, отчёт по ошибкам"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
     </div>
   </header>
 
   <main class="layout" id="layout">
     <aside class="chat" id="chat">
       <div class="chat-tabs" id="chat-tabs"></div>
-      <div class="chat-opts" id="chat-opts">
-        <select id="chat-model" title="Модель"></select>
-        <select id="chat-effort" title="Усилие (effort): сколько Claude думает"></select>
-        <button type="button" class="link-btn" id="chat-del" title="Удалить этот чат">удалить чат</button>
-      </div>
       <div class="chat-log" id="chat-log"></div>
       <form class="chat-input" id="chat-form">
         <textarea id="chat-text" rows="1" placeholder="Спроси Claude про позицию, партию или задачу…"></textarea>
-        <button class="btn primary" id="chat-send" type="submit">Отправить</button>
+        <div class="chat-row">
+          <button type="button" class="chip-sel" id="chat-model-btn" hidden title="Модель, сколько думать; удалить чат"><span id="chat-model-text"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <label class="switch" id="ask-switch" title="Твой ход на доске чата или в позиции из задачи — вопрос Claude про этот ход"><input type="checkbox" id="auto-ask"><span class="sw" aria-hidden="true"></span><span>Разбирать мои ходы</span></label>
+          <button class="btn primary" id="chat-send" type="submit">Отправить</button>
+        </div>
       </form>
     </aside>
     <div class="gutter" id="g2" title="Тяни, чтобы поменять ширину · двойной клик — авто"></div>
@@ -59,14 +60,16 @@
       </div>
       <div class="board-foot">
         <div class="mat cg-wrap" id="mat-bottom"></div>
-        <button type="button" class="icon flip-btn" id="flip" title="Перевернуть доску (F)">⇅ Перевернуть</button>
       </div>
-      <!-- move buttons under the board (big on a touch screen); a one-finger swipe on the board does prev/next too -->
+      <!-- move buttons under the board (big on a touch screen); a one-finger swipe on the board does prev/next too.
+           The pencil is for touch screens only: a finger draws arrows while it is on (a mouse draws with the right button). -->
       <div class="nav board-nav" id="nav">
         <button type="button" class="icon" data-nav="first" title="В начало (↑)"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5" width="3" height="14" rx="1"/><path d="M19.5 5.5V18.5L9.5 12Z"/></svg></button>
         <button type="button" class="icon" data-nav="prev" title="Назад (←) · свайп вправо по доске"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5.5V18.5L7 12Z"/></svg></button>
         <button type="button" class="icon" data-nav="next" title="Вперёд (→) · свайп влево по доске"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5V18.5L17 12Z"/></svg></button>
         <button type="button" class="icon" data-nav="last" title="В конец (↓)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5V18.5L14.5 12Z"/><rect x="16.5" y="5" width="3" height="14" rx="1"/></svg></button>
+        <button type="button" class="icon tool touch-only" id="draw-btn" aria-pressed="false" aria-label="Рисовать стрелки пальцем" title="Рисовать стрелки пальцем"><svg class="line-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg></button>
+        <button type="button" class="icon tool" id="flip" aria-label="Перевернуть доску" title="Перевернуть доску (F)"><svg class="line-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 20V4M3 8l4-4 4 4M17 4v16M13 16l4 4 4-4"/></svg></button>
       </div>
       <div class="meta" id="meta"></div>
     </section>
@@ -75,21 +78,18 @@
     <aside class="side">
       <div class="preview" id="preview" hidden></div>
       <div class="side-body" id="panel"></div>
-      <div class="side-foot" id="foot">
-        <div class="foot-right">
-          <label class="switch" id="ask-switch" title="В диаграммах Claude и в позициях из задач твой ход = просьба к Claude посчитать вариант. На своей доске — кнопкой под деревом."><input type="checkbox" id="auto-ask"><span>Claude разбирает мои ходы</span></label>
-          <label class="switch" id="engine-switch" title="Stockfish (L)"><input type="checkbox" id="engine-on"><span>Stockfish</span></label>
-        </div>
-      </div>
     </aside>
 
   </main>
 </div>
 
 <div class="hoverboard" id="hoverboard" hidden><div id="hb"></div></div>
-<div class="ctx" id="ctx" hidden></div>
+<!-- menus: the same look everywhere; a tree move's menu opens by right click, a long press or its ⋯ -->
+<div class="menu ctx" id="ctx" role="menu" hidden></div>
+<div class="menu" id="app-menu" role="menu" hidden></div>
+<div class="menu" id="model-pop" hidden></div>
 <div class="pop" id="jobs-pop" hidden></div>
 <div class="pop" id="chats-pop" hidden></div>
-<script type="module" src="/static/app.js?v=31"></script>
+<script type="module" src="/static/app.js?v=32"></script>
 </body>
 </html>
