@@ -109,6 +109,14 @@ function regLine(line) {
   return key;
 }
 
+// The longest of `lines` that starts the same way as `ln` and goes on further. An explanation quotes a move alone
+// and then the whole line from it (28...e4 «эту угрозу снимает. Дальше:» 28...e4 29.Bxf6 …): both quotes show the
+// same one line on the board, whichever of them is clicked or hovered.
+function fullLine(ln, lines) {
+  const extends_ = (o) => o?.start === ln.start && o.plies?.length > ln.plies.length && ln.plies.every((p, i) => o.plies[i].uci === p.uci);
+  return lines.reduce((best, o) => (extends_(o) && o.plies.length > best.plies.length ? o : best), ln);
+}
+
 function inline(text, lines = null) {
   const keep = [];
   const stash = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
@@ -125,7 +133,7 @@ function inline(text, lines = null) {
     s = s.replace(/\{L(\d+)\}/g, (_, k) => {
       const ln = lines[Number(k)];
       if (!ln?.plies?.length) return "";
-      const key = regLine(ln);
+      const key = regLine(fullLine(ln, lines)); // the text shows its own moves, the board the whole line
       return stash(`<span class="mseq" data-line="${key}">${ln.plies.map((p, i) =>
         `${p.num.endsWith(".") || i === 0 ? p.num : ""}<b class="mvl" data-i="${i}">${esc(p.san)}</b>`).join(" ")}</span>`);
     });
