@@ -726,3 +726,19 @@ a.btn { text-decoration: none; display: inline-flex; }
 .menu-form { display: flex; gap: 6px; padding: 2px 6px 6px; }
 .menu-form input { flex: 1; min-width: 0; font: 13px var(--font-mono); padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); }
 .players { margin-top: 2px; }
+
+/* ---------- step 4: puzzles ---------- */
+.pz-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pz-bar .chip-sel { max-width: 100%; }
+.pz-bar .chip-sel span { overflow: hidden; text-overflow: ellipsis; }
+.pz-bar .chip-sel .ico { width: 14px; height: 14px; }
+.pz-stats { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-left: auto; }
+.pz-stats b { color: var(--ink); font-family: var(--font-mono); }
+.pz-stats .ladder .lr b { font-size: 20px; }
+.menu-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 8px 6px; max-width: 300px; }
+.actions .grow { flex: 1; }
+.ask-btn { padding-left: 2px; }
+@media (any-pointer: coarse) {
+  .pz-bar .chip-sel { min-height: 44px; font-size: 13px; }
+}
+.seg button { white-space: nowrap; }

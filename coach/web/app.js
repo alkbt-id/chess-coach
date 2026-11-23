@@ -2136,17 +2136,13 @@ function lpPanelHtml() {
     h += `<div class="ladder"><div class="lr"><b>${g?.rating ? Math.round(g.rating) : "…"}</b><span>рейтинг задач на Lichess · ${esc(acc.user || "")}</span></div>
       ${lp.status.rated ? "" : `<div class="lr-meta">у входа нет права записи задач — подключи Lichess заново</div>`}</div>`;
   }
-  const angles = [["weak", "Под мои слабости"], ["mix", "Смесь"], ...(lp.custom ? [[lp.custom.angle, `Дебют: ${lp.custom.name}`]] : []), ...(lp.weak || []).map((w) => [w.theme, w.name])];
-  h += `<div class="lp-opts">
-    <select id="lp-angle" title="Тема задач">${angles.filter((a, i, arr) => arr.findIndex((x) => x[0] === a[0]) === i).map(([v, t]) => `<option value="${v}"${v === lp.angle ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>
-    <select id="lp-diff" title="Сложность относительно твоего рейтинга">${["easier", "normal", "harder"].map((v) => `<option value="${v}"${v === lp.difficulty ? " selected" : ""}>${DIFF_RU[v]}</option>`).join("")}</select>
-    <button type="button" class="link-btn" id="lp-weak-toggle">${lp.showWeak ? "скрыть слабости" : "мои слабости"}</button></div>`;
+  const angle = lpAngles().find(([v]) => v === lp.angle)?.[1] || lp.angle;
+  h += `<div class="pz-bar"><button type="button" class="chip-sel" id="lp-pick" title="Тема задач и сложность; мои слабости">${ICON.filter}<span>${esc(angle)} · ${esc(DIFF_RU[lp.difficulty] || "")}</span></button></div>`;
   if (lp.showWeak) {
     h += lp.weak ? `<div class="lp-weak">${lp.weak.map((w) => `<div><b>${esc(w.name)}</b> — <span class="hint">${esc(w.why)}</span>
         ${w.examples?.length ? `<div class="lp-ex">примеры из твоих партий: ${w.examples.map((id, i) => `<button type="button" class="link-btn" data-own="${id}">${i + 1}</button>`).join(" ")}</div>` : ""}</div>`).join("")}</div>`
       : `<p class="hint">Считаю слабости…</p>`;
   }
-  h += `<hr class="sep">`;
   const p = lp.cur, st = lp.st;
   if (st?.error) return h + `<p class="msg-error">${esc(st.error)}</p><div class="actions"><button type="button" class="btn primary" id="lp-next">Ещё раз</button></div>`;
   if (!p) return h + `<p class="hint">Загружаю задачу с Lichess…</p>`;
@@ -2172,10 +2168,10 @@ function lpPanelHtml() {
     h += `<p class="hint">Задача ${p.rating} · ${p.themes.map(themeRu).map(esc).join(", ")} · <a href="https://lichess.org/training/${esc(p.id)}" target="_blank" rel="noopener">на Lichess ↗</a></p>`;
   }
   h += `<div class="actions">`;
-  if (st.wrong) h += `<button type="button" class="btn primary" id="lp-retry">Ещё раз</button><button type="button" class="btn" id="lp-solution">Показать решение</button><button type="button" class="btn quiet" id="lp-next">Дальше</button>`;
-  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next">Дальше</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Открыть в анализе</button>`;
-  else h += `<button type="button" class="btn" id="lp-solution">Сдаться и показать решение</button>`;
-  h += `<button type="button" class="btn" id="lp-ask">Спросить Claude</button></div>`;
+  if (st.wrong) h += `<button type="button" class="btn primary" id="lp-retry">Ещё раз</button><button type="button" class="btn" id="lp-solution">Решение</button><span class="grow"></span><button type="button" class="btn quiet" id="lp-next">Дальше →</button>`;
+  else if (st.done) h += `<button type="button" class="btn primary" id="lp-next">Дальше →</button><button type="button" class="btn" id="lp-solution">Решение</button><button type="button" class="btn" id="lp-study">Открыть в анализе</button>`;
+  else h += `<button type="button" class="btn" id="lp-solution" title="Задача засчитается как не решённая">Решение</button>`;
+  h += `</div><div class="actions"><button type="button" class="btn quiet ask-btn" id="lp-ask">${ICON.spark}Спросить Claude про эту задачу</button></div>`;
   return h;
 }
 
@@ -2192,10 +2188,15 @@ async function lpClick(t) {
     case "lp-next": lpNext(); break;
     case "lp-retry": lpRetry(); break;
     case "lp-recheck": await lpRefresh(); renderPuzzlePanel(); break;
-    case "lp-weak-toggle":
-      lp.showWeak = !lp.showWeak;
-      renderPuzzlePanel();
-      if (lp.showWeak && !lp.weak) { try { lp.weak = (await http.get("/api/lpuzzle/weak")).themes; } catch { lp.weak = []; } renderPuzzlePanel(); }
+    case "lp-weak-toggle": await lpToggleWeak(); break;
+    case "lp-pick":
+      openMenu(t, lpPickMenuHtml(), async (act) => {
+        if (act === "weak") { await lpToggleWeak(); return false; }
+        if (act.startsWith("a:")) lp.angle = act.slice(2); else if (act.startsWith("d:")) lp.difficulty = act.slice(2); else return false;
+        lpSave();
+        if (!lp.st || lp.st.done || lp.st.error || (!lp.st.step && !lp.st.wrong)) lpNext(); else renderPuzzlePanel();
+        return false;
+      });
       break;
     case "lp-solution":
       if (!st.done) { // giving up ends the puzzle: rated as a loss, then «Дальше» is offered
@@ -2215,6 +2216,25 @@ async function lpClick(t) {
       askClaude(st.wrong ? `Почему мой ход ${st.wrong.san} в этой задаче с Lichess плохой? Покажи на доске.` : `Поясни эту задачу с Lichess: почему решение ${p.solutionSan.join(" ")}? Покажи на доске.`);
       break;
   }
+}
+
+// the themes to pick from: the weaknesses first, the section's opening when one sent the user here
+function lpAngles() {
+  const a = [["weak", "Под мои слабости"], ["mix", "Смесь"], ...(lp.custom ? [[lp.custom.angle, `Дебют: ${lp.custom.name}`]] : []), ...(lp.weak || []).map((w) => [w.theme, w.name])];
+  return a.filter((x, i) => a.findIndex((y) => y[0] === x[0]) === i);
+}
+function lpPickMenuHtml() {
+  return `<div class="menu-head">Тема</div>
+    ${lpAngles().map(([v, t]) => `<button type="button" class="mi${v === lp.angle ? " on" : ""}" data-act="a:${esc(v)}">${esc(t)}${v === lp.angle ? '<span class="k">✓</span>' : ""}</button>`).join("")}
+    <div class="menu-head">Сложность</div>
+    <div class="seg">${["easier", "normal", "harder"].map((v) => `<button type="button" data-act="d:${v}" class="${v === lp.difficulty ? "on" : ""}" aria-pressed="${v === lp.difficulty}">${DIFF_RU[v]}</button>`).join("")}</div>
+    <div class="menu-sep"></div>
+    <button type="button" class="mi" data-act="weak">${lp.showWeak ? "Скрыть мои слабости" : "Мои слабости — откуда темы"}</button>`;
+}
+async function lpToggleWeak() {
+  lp.showWeak = !lp.showWeak;
+  renderPuzzlePanel();
+  if (lp.showWeak && !lp.weak) { try { lp.weak = (await http.get("/api/lpuzzle/weak")).themes; } catch { lp.weak = []; } renderPuzzlePanel(); }
 }
 
 window.__lp = { move: (o, d) => lpMove(o, d), view: () => lpView(), st: () => lp.st }; // test handle (dev harness)
@@ -2474,22 +2494,24 @@ function renderPuzzlePanel() {
   if (mode !== "puzzle") return;
   const panel = $("#panel");
   const p = pz.cur, st = pz.st;
-  let html = `<div class="pmode" role="group" aria-label="Режим задач">
-      <button type="button" class="chip" data-pmode="srs" aria-pressed="${!ladder.on && !lp.on}" title="Задачи возвращаются на повтор: ошибки — скоро, решённые — всё реже">Повторение</button>
-      <button type="button" class="chip" data-pmode="ladder" aria-pressed="${ladder.on && !lp.on}" title="Задачи под твой рейтинг: решил — рейтинг растёт и задачи сложнее">Рейтинг</button>
-      <button type="button" class="chip" data-pmode="lichess" aria-pressed="${lp.on}" title="Задачи с Lichess в твой рейтинг на Lichess, подбор под твои слабости">Lichess</button>
+  const due = pz.list.filter((x) => pz.prog[x.id] && pz.prog[x.id].due <= Date.now()).length;
+  const pm = (k, on, label, title, extra = "") => `<button type="button" role="tab" data-pmode="${k}" class="${on ? "on" : ""}" aria-selected="${on}" title="${title}">${label}${extra}</button>`;
+  let html = `<div class="seg wide" role="tablist" aria-label="Вид задач">
+      ${pm("srs", !ladder.on && !lp.on, "Повторение", "Задачи из твоих партий возвращаются на повтор: ошибки — скоро, решённые — всё реже", due ? `<span class="badge">${due}</span>` : "")}
+      ${pm("ladder", ladder.on && !lp.on, "На рейтинг", "Задачи из твоих партий под твой рейтинг: решил — рейтинг растёт и задачи сложнее")}
+      ${pm("lichess", lp.on, "Lichess", "Задачи с Lichess в твой рейтинг на Lichess, подбор под твои слабости")}
     </div>`;
   const op = lp.on ? lpOpening() : null;
   if (op || (!lp.on && pz.only)) { // puzzles of a repertoire section: say so, with the way back
     const n = op ? "" : `: ${pz.list.filter((x) => match(x, { kind: "all", phase: "all", color: "all" })).length}`;
     html += `<div class="rep-trial"><div>${op ? `Задачи Lichess в дебюте «${esc(op.name)}»` : `Мои задачи из партий раздела «${esc(pz.only.name)}»${n}`}</div>
-      <div class="actions">${op ? "" : `<button type="button" class="link-btn" id="puz-all">все мои задачи</button>`}<button type="button" class="link-btn" id="puz-rep">← в репертуар</button></div></div>`;
+      <div class="actions"><button type="button" class="btn small" id="puz-rep">‹ В репертуар</button>${op ? "" : `<button type="button" class="btn small quiet" id="puz-all">Все мои задачи</button>`}</div></div>`;
   }
   if (lp.on) { panel.innerHTML = html + lpPanelHtml(); return; }
-  html += `<div class="stats" id="stats"></div><div class="filters" id="filters"></div><hr class="sep">`;
+  html += `<div class="pz-bar"><button type="button" class="chip-sel" id="pz-filter" title="Какие задачи из твоих партий: тип, стадия, цвет">${ICON.filter}<span>${esc(pzFilterSummary())}</span></button><div class="pz-stats" id="stats"></div></div>`;
   if (!p) {
-    panel.innerHTML = `${html}<p class="empty">Под этот фильтр позиций нет. Сними часть фильтров выше.</p>`;
-    renderStats(); renderFilters();
+    panel.innerHTML = `${html}<p class="empty">Под этот фильтр позиций нет — выбери другой.</p>`;
+    renderStats();
     return;
   }
   const lastSan = p.lastSan ? `<span class="san hov" data-arrow="${p.last || ""}" data-brush="orange">${esc(p.lastSan)}</span>` : "";
@@ -2519,27 +2541,23 @@ function renderPuzzlePanel() {
   } else if (st.solution) {
     html += `<div class="result info"><h3>Решение</h3>${whyHtml(st.best)}</div>`;
   }
-  if (finished) {
-    html += treeHtml(solutionTree(), preview?.nodeId || "");
-    html += `<p class="hint">Нажми на ход — позиция появится на доске, дальше <span class="kbd">←</span><span class="kbd">→</span>.</p>`;
-  }
+  if (finished) html += treeHtml(solutionTree(), preview?.nodeId || "");
   html += `<div class="actions">`;
   if (!r && !st.solution) {
     html += `<button type="button" class="btn" id="hint" ${st.hinted ? "disabled" : ""}>Подсказка</button>
-      <button type="button" class="btn" id="solve">Показать решение</button>
-      <button type="button" class="btn quiet" id="skip">Пропустить</button>`;
+      <button type="button" class="btn" id="solve">Решение</button><span class="grow"></span>
+      <button type="button" class="btn quiet" id="skip">Пропустить →</button>`;
   } else if (finished) {
-    html += `<button type="button" class="btn primary" id="next">Дальше</button>
+    html += `<button type="button" class="btn primary" id="next">Дальше →</button>
       <button type="button" class="btn" id="to-study">Открыть в анализе</button>`;
   } else {
     html += `<button type="button" class="btn primary" id="retry">Ещё раз</button>
-      <button type="button" class="btn" id="solve">Показать решение</button>
-      <button type="button" class="btn quiet" id="next">Дальше</button>`;
+      <button type="button" class="btn" id="solve">Решение</button><span class="grow"></span>
+      <button type="button" class="btn quiet" id="next">Дальше →</button>`;
   }
-  html += `<button type="button" class="btn" id="ask-claude">Спросить Claude</button></div>`;
+  html += `</div><div class="actions"><button type="button" class="btn quiet ask-btn" id="ask-claude">${ICON.spark}Спросить Claude про эту задачу</button></div>`;
   panel.innerHTML = html;
   renderStats();
-  renderFilters();
 }
 
 $("#panel").addEventListener("click", async (e) => {
@@ -2575,10 +2593,16 @@ $("#panel").addEventListener("click", async (e) => {
     if (!st?.result && !st?.solution) nextPuzzle(); else renderPuzzlePanel();
     return;
   }
-  if (t.classList.contains("chip")) {
-    pz.filt = { ...pz.filt, [t.dataset.key]: t.dataset.val };
-    http.send("PUT", "/api/settings", { filter: pz.filt });
-    if (!p || !match(p) || st.result) nextPuzzle(); else renderPuzzlePanel();
+  if (t.id === "pz-filter") {
+    openMenu(t, pzFilterMenuHtml(), (act) => {
+      if (!act.startsWith("f:")) return false;
+      const [, key, val] = act.split(":");
+      pz.filt = { ...pz.filt, [key]: val };
+      http.send("PUT", "/api/settings", { filter: pz.filt });
+      if (!pz.cur || !match(pz.cur) || pz.st?.result) nextPuzzle(); else renderPuzzlePanel();
+      setMenu(pzFilterMenuHtml());
+      return true;
+    });
     return;
   }
   switch (t.id) {
@@ -2620,6 +2644,7 @@ function renderMeta() {
     <a href="https://lichess.org/${esc(p.game)}/${p.color}#${p.ply - 1}" target="_blank" rel="noopener">Партия на Lichess ↗</a>`;
 }
 
+// one line under the switch: the repetition's numbers, or the rating ladder
 function renderStats() {
   const el = $("#stats");
   updateCounts();
@@ -2630,20 +2655,23 @@ function renderStats() {
   const seen = pool.filter((p) => pz.prog[p.id]);
   const due = seen.filter((p) => pz.prog[p.id].due <= now).length;
   const learned = seen.filter((p) => (pz.prog[p.id].box || 0) >= 3).length;
-  const stat = (n, label) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
-  el.innerHTML = [stat(pool.length, "в подборке"), stat(pool.length - seen.length, "не решал"), stat(due, "на повтор"), stat(learned, "выучено"), stat(`${pz.session.ok}/${pz.session.done}`, "за сессию")].join("");
+  el.innerHTML = `<span title="${pool.length - seen.length} ещё не решал">на повтор <b>${due}</b></span><span>выучено <b>${learned}</b></span><span title="Решено за этот сеанс">сегодня <b>${pz.session.ok}/${pz.session.done}</b></span>`;
 }
 
-function renderFilters() {
-  const el = $("#filters");
-  if (!el) return;
+// the filter of the user's puzzles: a chip with what is chosen; its menu has the three groups with counts
+const PZ_FILTERS = [
+  ["kind", "Тип", [["all", "Все"], ["blunder", "Не зевни"], ["missed", "Накажи"]]],
+  ["phase", "Стадия", [["all", "Все"], ["opening", "Дебют"], ["middlegame", "Миттельшпиль"], ["endgame", "Эндшпиль"]]],
+  ["color", "Цвет", [["all", "Все"], ["white", "Белые"], ["black", "Чёрные"]]],
+];
+function pzFilterSummary() {
+  const parts = PZ_FILTERS.map(([k, , opts]) => (pz.filt[k] === "all" ? "" : opts.find(([v]) => v === pz.filt[k])?.[1])).filter(Boolean);
+  return `${parts.length ? parts.join(" · ") : "Все задачи"} · ${pz.list.filter((p) => match(p)).length}`;
+}
+function pzFilterMenuHtml() {
   const count = (key, val) => pz.list.filter((p) => match(p, { ...pz.filt, [key]: val })).length;
-  const group = (key, label, opts) => `<div class="group" role="group" aria-label="${label}"><span class="group-label">${label}</span>${
-    opts.map(([v, t]) => `<button type="button" class="chip" data-key="${key}" data-val="${v}" aria-pressed="${pz.filt[key] === v}">${t}<small>${count(key, v)}</small></button>`).join("")}</div>`;
-  el.innerHTML =
-    group("kind", "Тип", [["all", "Все"], ["blunder", "Не зевни"], ["missed", "Накажи"]]) +
-    group("phase", "Стадия", [["all", "Все"], ["opening", "Дебют"], ["middlegame", "Миттельш."], ["endgame", "Эндшпиль"]]) +
-    group("color", "Цвет", [["all", "Все"], ["white", "Белые"], ["black", "Чёрные"]]);
+  return PZ_FILTERS.map(([key, label, opts]) => `<div class="menu-head">${label}</div><div class="menu-chips">${
+    opts.map(([v, t]) => `<button type="button" class="chip" data-act="f:${key}:${v}" aria-pressed="${pz.filt[key] === v}">${t} <small>${count(key, v)}</small></button>`).join("")}</div>`).join("");
 }
 
 function renderPuzzle() {
